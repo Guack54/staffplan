@@ -1,8 +1,8 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>StaffPlan</title>
   <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -3816,8 +3816,21 @@ function BackupRestoreModal({ onClose, updateStaff, updateEntries, updateDailySt
       // Restore visit data (sheet added in backup version 2)
       const visitRows2 = sheetData("VisitData");
       const newVisits = {};
-      visitRows2.filter(r=>r[0]&&r[1]&&r[2]).forEach(r => {
-        const [key, weekStart, team, evals, visits] = r;
+      visitRows2.filter(r => r[2]).forEach(r => {
+        let [key, weekStart, team, evals, visits] = r;
+        if (!team) return;
+        // Normalize old-format keys (YYYY-WNN_YYYY-MM-DD) to new format (week_YYYY-MM-DD)
+        if (key && String(key).includes("_")) {
+          const datePart = String(key).split("_").pop();
+          if (datePart && datePart.match(/^\d{4}-\d{2}-\d{2}$/)) key = "week_" + datePart;
+        }
+        // If key is missing but weekStart exists, derive it
+        if (!key && weekStart) {
+          const d = new Date(String(weekStart)+"T12:00:00");
+          if (!isNaN(d)) { d.setDate(d.getDate()-d.getDay()); key = "week_"+fmt(d); }
+        }
+        if (!key) return;
+        weekStart = weekStart || key.replace("week_","");
         if (!newVisits[key]) newVisits[key] = { weekStart: String(weekStart) };
         newVisits[key][String(team)] = { evals: Number(evals)||0, visits: Number(visits)||0 };
       });
