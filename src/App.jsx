@@ -588,12 +588,13 @@ export default function StaffingApp() {
 
   // Nav helper
   const VIEW_TABS = [
-    { id:"day",     icon:"☀️", label:"Day"     },
-    { id:"grid",    icon:"📅", label:"Week"    },
-    { id:"month",   icon:"🗓", label:"Month"   },
-    { id:"year",    icon:"📆", label:"Year"    },
-    { id:"summary", icon:"📊", label:"Dept Stats" },
-    { id:"visits",  icon:"📈", label:"Visits"  },
+    { id:"day",       icon:"☀️", label:"Day"        },
+    { id:"grid",      icon:"📅", label:"Week"       },
+    { id:"month",     icon:"🗓", label:"Month"      },
+    { id:"year",      icon:"📆", label:"Year"       },
+    { id:"summary",   icon:"📊", label:"Dept Stats" },
+    { id:"visits",    icon:"📈", label:"Visits"     },
+    { id:"timesheet", icon:"🕐", label:"Timesheets" },
   ];
 
   // Day nav helpers
@@ -822,6 +823,9 @@ export default function StaffingApp() {
         )}
         {activeTab==="visits" && (
           <VisitsTab visitData={visitData} updateVisitData={updateVisitData} staff={staff} weekStart={weekStart} getDayFTE={getDayFTE} />
+        )}
+        {activeTab==="timesheet" && (
+          <TimesheetTab staff={staff} entries={entries} weekStart={weekStart} nonWorkTypes={nonWorkTypes} />
         )}
 
       </div>
@@ -2985,15 +2989,20 @@ function VisitEntryModal({ visitData, updateVisitData, staff, weekStart, getDayF
           <button onClick={onClose} style={{background:"#f3f4f6",border:"none",borderRadius:8,padding:"5px 12px",cursor:"pointer",fontWeight:700}}>✕</button>
         </div>
 
-        {/* Week picker */}
-        <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:16,padding:"8px 12px",background:"#f8fafc",borderRadius:9,border:"1px solid #e5e7eb"}}>
-          <span style={{fontSize:12,color:"#6b7280",fontWeight:600}}>Week of:</span>
-          <input type="date" value={entryWeekStart}
-            onChange={e=>{ if(e.target.value){ const d=new Date(e.target.value+"T12:00:00"); d.setDate(d.getDate()-d.getDay()); setEntryWeekStart(fmt(d)); }}}
-            style={{padding:"4px 8px",borderRadius:7,border:"1px solid #d1d5db",fontSize:12,fontWeight:600,color:"#374151"}} />
-          <span style={{fontSize:11,color:"#9ca3af"}}>
-            {new Date(entryWeekStart+"T12:00:00").toLocaleDateString("en-US",{month:"short",day:"numeric"})}–{new Date(entryWeekEnd+"T12:00:00").toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"})}
-          </span>
+        {/* Week picker with arrow nav */}
+        <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:16,padding:"8px 12px",background:"#f8fafc",borderRadius:9,border:"1px solid #e5e7eb"}}>
+          <button onClick={()=>{ const d=new Date(entryWeekStart+"T12:00:00"); d.setDate(d.getDate()-7); setEntryWeekStart(fmt(d)); }}
+            style={{background:"#e5e7eb",border:"none",borderRadius:6,width:28,height:28,cursor:"pointer",fontSize:14,fontWeight:700,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>‹</button>
+          <div style={{flex:1,textAlign:"center"}}>
+            <div style={{fontSize:12,fontWeight:700,color:"#1e3a5f"}}>
+              {new Date(entryWeekStart+"T12:00:00").toLocaleDateString("en-US",{month:"short",day:"numeric"})} – {new Date(entryWeekEnd+"T12:00:00").toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"})}
+            </div>
+            <input type="date" value={entryWeekStart}
+              onChange={e=>{ if(e.target.value){ const d=new Date(e.target.value+"T12:00:00"); d.setDate(d.getDate()-d.getDay()); setEntryWeekStart(fmt(d)); }}}
+              style={{fontSize:10,color:"#9ca3af",border:"none",background:"transparent",cursor:"pointer",textAlign:"center",marginTop:1}} />
+          </div>
+          <button onClick={()=>{ const d=new Date(entryWeekStart+"T12:00:00"); d.setDate(d.getDate()+7); setEntryWeekStart(fmt(d)); }}
+            style={{background:"#e5e7eb",border:"none",borderRadius:6,width:28,height:28,cursor:"pointer",fontSize:14,fontWeight:700,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>›</button>
         </div>
 
         {/* Team entry cards — compact */}
@@ -3033,6 +3042,208 @@ function VisitEntryModal({ visitData, updateVisitData, staff, weekStart, getDayF
             <span style={{marginLeft:6,color:"#9ca3af"}}>({VISIT_ORDER.reduce((a,t)=>(Number(entryValues[t].evals)||0)+a,0)} evals)</span>
           </div>
         </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Timesheet Tab ────────────────────────────────────────────────────────────
+function TimesheetTab({ staff, entries, weekStart, nonWorkTypes }) {
+  const today = new Date(); today.setHours(0,0,0,0);
+  const [rangeType, setRangeType] = useState("week");
+  const [customStart, setCustomStart] = useState(() => {
+    const s = new Date(today); s.setDate(today.getDate()-today.getDay()); return fmt(s);
+  });
+  const [customEnd, setCustomEnd] = useState(fmt(today));
+  const [sortCol, setSortCol] = useState("name");
+  const [sortDir, setSortDir] = useState(1);
+  const [filterTeam, setFilterTeam] = useState("All");
+
+  // Compute date range from rangeType
+  const { rangeStart, rangeEnd } = useMemo(() => {
+    const t = new Date(today);
+    const thisSun = new Date(t); thisSun.setDate(t.getDate()-t.getDay());
+    const thisSat = new Date(thisSun); thisSat.setDate(thisSun.getDate()+6);
+    if (rangeType==="week") return { rangeStart:fmt(thisSun), rangeEnd:fmt(thisSat) };
+    if (rangeType==="lastweek") {
+      const s=new Date(thisSun); s.setDate(thisSun.getDate()-7);
+      const e=new Date(s); e.setDate(s.getDate()+6);
+      return { rangeStart:fmt(s), rangeEnd:fmt(e) };
+    }
+    if (rangeType==="month") { const y=t.getFullYear(),m=t.getMonth(); return { rangeStart:fmt(new Date(y,m,1)), rangeEnd:fmt(new Date(y,m+1,0)) }; }
+    if (rangeType==="year") return { rangeStart:`${t.getFullYear()}-01-01`, rangeEnd:`${t.getFullYear()}-12-31` };
+    return { rangeStart:customStart, rangeEnd:customEnd };
+  }, [rangeType, customStart, customEnd]);
+
+  // Build array of dateStrings in range
+  const rangeDays = useMemo(() => {
+    const days=[], s=new Date(rangeStart+"T12:00:00"), e=new Date(rangeEnd+"T12:00:00");
+    if (isNaN(s)||isNaN(e)||s>e) return days;
+    const cur=new Date(s);
+    while(cur<=e){ days.push(fmt(cur)); cur.setDate(cur.getDate()+1); }
+    return days;
+  }, [rangeStart, rangeEnd]);
+
+  // Aggregate hours per staff per team + non-work
+  const rows = useMemo(() => {
+    const activeStaff = staff.filter(s=>!s.archived && (filterTeam==="All"||s.team===filterTeam));
+    return activeStaff.map(s => {
+      const byTeam = {}; TEAMS.forEach(t=>{ byTeam[t]=0; });
+      const byNW = {};
+      let totalWork=0, totalNW=0;
+      rangeDays.forEach(ds => {
+        const raw = entries[`${s.id}_${ds}`];
+        const segs = raw ? (Array.isArray(raw)?raw:[raw]) : [];
+        segs.forEach(e => {
+          const wh = Number(e.hours)||0;
+          const nwh = Number(e.nonWorkHours)||0;
+          const team = e.team||s.team;
+          if (wh>0) { byTeam[team]=(byTeam[team]||0)+wh; totalWork+=wh; }
+          if (e.nonWork && nwh>0) { byNW[e.nonWork]=(byNW[e.nonWork]||0)+nwh; totalNW+=nwh; }
+        });
+      });
+      return { s, byTeam, byNW, totalWork, totalNW, total:totalWork+totalNW };
+    });
+  }, [staff, entries, rangeDays, filterTeam]);
+
+  const sorted = useMemo(() => {
+    return [...rows].sort((a,b) => {
+      let av, bv;
+      if (sortCol==="name")  { av=a.s.name; bv=b.s.name; return sortDir*av.localeCompare(bv); }
+      if (sortCol==="team")  { av=a.s.team; bv=b.s.team; return sortDir*av.localeCompare(bv); }
+      if (sortCol==="work")  { av=a.totalWork; bv=b.totalWork; }
+      else if (sortCol==="nw") { av=a.totalNW; bv=b.totalNW; }
+      else if (sortCol==="total") { av=a.total; bv=b.total; }
+      else { av=a.byTeam[sortCol]||0; bv=b.byTeam[sortCol]||0; }
+      return sortDir*(av-bv);
+    });
+  }, [rows, sortCol, sortDir]);
+
+  const toggleSort = (col) => { if(sortCol===col) setSortDir(d=>-d); else { setSortCol(col); setSortDir(-1); } };
+  const SortTh = ({col, children, style={}}) => (
+    <th onClick={()=>toggleSort(col)} style={{padding:"8px 10px",fontWeight:700,fontSize:11,cursor:"pointer",userSelect:"none",whiteSpace:"nowrap",
+      color:sortCol===col?"#1e3a5f":"#6b7280",background:sortCol===col?"#eff6ff":"#f9fafb",...style}}>
+      {children}{sortCol===col?(sortDir>0?" ↑":" ↓"):""}
+    </th>
+  );
+
+  // Totals row
+  const totals = useMemo(() => {
+    const byTeam={}; TEAMS.forEach(t=>byTeam[t]=0);
+    const byNW={};
+    rows.forEach(r => {
+      TEAMS.forEach(t=>{ byTeam[t]+=(r.byTeam[t]||0); });
+      Object.entries(r.byNW).forEach(([code,h])=>{ byNW[code]=(byNW[code]||0)+h; });
+    });
+    return { byTeam, byNW, totalWork:rows.reduce((a,r)=>a+r.totalWork,0), totalNW:rows.reduce((a,r)=>a+r.totalNW,0), total:rows.reduce((a,r)=>a+r.total,0) };
+  }, [rows]);
+
+  const nwCodes = useMemo(() => {
+    const codes = new Set();
+    rows.forEach(r => Object.keys(r.byNW).forEach(c=>codes.add(c)));
+    return [...codes].sort();
+  }, [rows]);
+
+  const fmtH = h => h===0?"—":`${h}h`;
+
+  return (
+    <div style={{display:"grid",gap:14}}>
+      {/* Controls */}
+      <div style={{background:"#fff",borderRadius:14,padding:14,border:"1px solid #e5e7eb",display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+        <div style={{fontSize:14,fontWeight:800,color:"#1e3a5f",flexShrink:0}}>🕐 Timesheets</div>
+        <div style={{display:"flex",gap:3,background:"#f1f5f9",borderRadius:8,padding:3}}>
+          {[["week","This Week"],["lastweek","Last Week"],["month","This Month"],["year","This Year"],["custom","Custom"]].map(([v,l])=>(
+            <button key={v} onClick={()=>setRangeType(v)} style={{padding:"4px 10px",borderRadius:6,fontSize:11,fontWeight:600,border:"none",cursor:"pointer",
+              background:rangeType===v?"#fff":"transparent",color:rangeType===v?"#1e3a5f":"#6b7280",
+              boxShadow:rangeType===v?"0 1px 3px rgba(0,0,0,0.1)":"none"}}>{l}</button>
+          ))}
+        </div>
+        {rangeType==="custom" && <>
+          <input type="date" value={customStart} onChange={e=>setCustomStart(e.target.value)} style={{padding:"4px 8px",borderRadius:7,border:"1px solid #d1d5db",fontSize:12}} />
+          <span style={{fontSize:12,color:"#9ca3af"}}>to</span>
+          <input type="date" value={customEnd} onChange={e=>setCustomEnd(e.target.value)} style={{padding:"4px 8px",borderRadius:7,border:"1px solid #d1d5db",fontSize:12}} />
+        </>}
+        <select value={filterTeam} onChange={e=>setFilterTeam(e.target.value)} style={{marginLeft:"auto",padding:"5px 10px",borderRadius:8,border:"1px solid #e5e7eb",fontSize:12,fontWeight:600,background:"#fff"}}>
+          <option>All</option>
+          {TEAMS.map(t=><option key={t}>{t}</option>)}
+        </select>
+      </div>
+
+      {/* Summary cards */}
+      <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:10}}>
+        <div style={{background:"#fff",borderRadius:12,padding:"12px 16px",border:"1px solid #e5e7eb",textAlign:"center"}}>
+          <div style={{fontSize:10,fontWeight:700,color:"#9ca3af",textTransform:"uppercase",marginBottom:4}}>Total Work Hours</div>
+          <div style={{fontSize:24,fontWeight:800,color:"#1e3a5f"}}>{totals.totalWork}h</div>
+          <div style={{fontSize:10,color:"#9ca3af"}}>{sorted.length} staff</div>
+        </div>
+        {TEAMS.map(t => {
+          const tc=TEAM_COLORS[t];
+          return <div key={t} style={{background:tc.bg,borderRadius:12,padding:"12px 16px",border:"1px solid "+tc.dot+"44",textAlign:"center"}}>
+            <div style={{fontSize:10,fontWeight:700,color:tc.text,textTransform:"uppercase",marginBottom:4}}>{t}</div>
+            <div style={{fontSize:24,fontWeight:800,color:tc.dot}}>{totals.byTeam[t]}h</div>
+            <div style={{fontSize:10,color:tc.text+"99"}}>{rangeDays.length} days</div>
+          </div>;
+        })}
+      </div>
+
+      {/* Main table */}
+      <div style={{background:"#fff",borderRadius:14,border:"1px solid #e5e7eb",overflow:"hidden"}}>
+        <div style={{overflowX:"auto",maxHeight:"calc(100vh - 340px)",overflowY:"auto"}}>
+          <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+            <thead style={{position:"sticky",top:0,zIndex:5}}>
+              <tr style={{borderBottom:"2px solid #e5e7eb"}}>
+                <SortTh col="name" style={{textAlign:"left",paddingLeft:16,position:"sticky",left:0,zIndex:6,background:"#f9fafb"}}>Staff</SortTh>
+                <SortTh col="team" style={{textAlign:"left"}}>Team</SortTh>
+                {TEAMS.map(t=><SortTh key={t} col={t} style={{textAlign:"center",background:sortCol===t?"#eff6ff":TEAM_COLORS[t].bg,color:TEAM_COLORS[t].text}}>{t}</SortTh>)}
+                <SortTh col="work" style={{textAlign:"center"}}>Work Hrs</SortTh>
+                {nwCodes.map(c => {
+                  const nw=nonWorkTypes.find(n=>n.code===c);
+                  return <th key={c} style={{padding:"8px 8px",fontWeight:700,fontSize:11,textAlign:"center",color:nw?.color||"#6b7280",background:(nw?.color||"#6b7280")+"11",whiteSpace:"nowrap"}}>{c}</th>;
+                })}
+                {nwCodes.length>0 && <SortTh col="nw" style={{textAlign:"center"}}>NW Hrs</SortTh>}
+                <SortTh col="total" style={{textAlign:"center",background:sortCol==="total"?"#eff6ff":"#f0f7ff",color:"#1e3a5f"}}>Total</SortTh>
+              </tr>
+            </thead>
+            <tbody>
+              {sorted.map(({s, byTeam, byNW, totalWork, totalNW, total}) => {
+                const tc=TEAM_COLORS[s.team];
+                return (
+                  <tr key={s.id} style={{borderBottom:"1px solid #f3f4f6"}}
+                    onMouseEnter={e=>e.currentTarget.style.background="#f9fafb"}
+                    onMouseLeave={e=>e.currentTarget.style.background=""}>
+                    <td style={{padding:"8px 16px",fontWeight:700,color:"#111827",whiteSpace:"nowrap",position:"sticky",left:0,background:"inherit",zIndex:2}}>
+                      <span style={{display:"inline-block",width:7,height:7,borderRadius:"50%",background:tc?.dot,marginRight:6}} />
+                      {s.name}
+                    </td>
+                    <td style={{padding:"8px 10px"}}>
+                      <span style={{padding:"2px 7px",borderRadius:99,background:tc?.bg,color:tc?.text,fontSize:10,fontWeight:700}}>{s.team}</span>
+                    </td>
+                    {TEAMS.map(t=><td key={t} style={{padding:"8px 10px",textAlign:"center",color:byTeam[t]>0?TEAM_COLORS[t].dot:"#d1d5db",fontWeight:byTeam[t]>0?700:400}}>{fmtH(byTeam[t])}</td>)}
+                    <td style={{padding:"8px 10px",textAlign:"center",fontWeight:700,color:"#1e3a5f"}}>{fmtH(totalWork)}</td>
+                    {nwCodes.map(c => {
+                      const nw=nonWorkTypes.find(n=>n.code===c);
+                      const h=byNW[c]||0;
+                      return <td key={c} style={{padding:"8px 8px",textAlign:"center",color:h>0?(nw?.color||"#6b7280"):"#d1d5db",fontWeight:h>0?700:400}}>{fmtH(h)}</td>;
+                    })}
+                    {nwCodes.length>0 && <td style={{padding:"8px 10px",textAlign:"center",color:totalNW>0?"#d97706":"#d1d5db",fontWeight:totalNW>0?700:400}}>{fmtH(totalNW)}</td>}
+                    <td style={{padding:"8px 10px",textAlign:"center",fontWeight:800,color:"#1e3a5f",background:"#f0f7ff"}}>{fmtH(total)}</td>
+                  </tr>
+                );
+              })}
+              {/* Totals row */}
+              <tr style={{borderTop:"2px solid #e5e7eb",background:"#f8fafc",fontWeight:800}}>
+                <td style={{padding:"8px 16px",fontWeight:800,color:"#374151",position:"sticky",left:0,background:"#f8fafc",zIndex:2}}>TOTAL</td>
+                <td />
+                {TEAMS.map(t=><td key={t} style={{padding:"8px 10px",textAlign:"center",color:TEAM_COLORS[t].dot,fontWeight:800}}>{totals.byTeam[t]>0?`${totals.byTeam[t]}h`:"—"}</td>)}
+                <td style={{padding:"8px 10px",textAlign:"center",fontWeight:800,color:"#1e3a5f"}}>{totals.totalWork>0?`${totals.totalWork}h`:"—"}</td>
+                {nwCodes.map(c=><td key={c} style={{padding:"8px 8px",textAlign:"center",color:"#d97706",fontWeight:800}}>{totals.byNW[c]>0?`${totals.byNW[c]}h`:"—"}</td>)}
+                {nwCodes.length>0 && <td style={{padding:"8px 10px",textAlign:"center",fontWeight:800,color:"#d97706"}}>{totals.totalNW>0?`${totals.totalNW}h`:"—"}</td>}
+                <td style={{padding:"8px 10px",textAlign:"center",fontWeight:800,color:"#1e3a5f",background:"#e0f2fe"}}>{totals.total>0?`${totals.total}h`:"—"}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        {sorted.length===0 && <div style={{padding:40,textAlign:"center",color:"#9ca3af",fontSize:13}}>No schedule data for this period.</div>}
       </div>
     </div>
   );
@@ -3480,23 +3691,27 @@ function BatchEntryModal({ staff, entries, updateEntries, nonWorkTypes, onClose 
       dates.forEach(ds => {
         const existing = entries[`${sid}_${ds}`];
         const hasData = existing && Array.isArray(existing) && existing.some(e=>Number(e.hours)>0||e.nonWork);
-        if (hasData && !overwrite) return; // skip
-        rows.push({ staffId: sid, name: s.name, team: s.team, dateStr: ds, hasExisting: hasData });
+        if (hasData && !overwrite) return; // skip if overwrite not enabled
+        rows.push({ staffId: sid, name: s.name, team: s.team, dateStr: ds, hasExisting: hasData, existing: existing||[], accepted: true });
       });
     });
     setPreview(rows);
     setStep("preview");
   };
+  const toggleAccept = (i) => setPreview(prev => prev.map((r,idx) => idx===i ? {...r, accepted:!r.accepted} : r));
+  const acceptAll = () => setPreview(prev => prev.map(r => ({...r, accepted:true})));
+  const rejectAll = () => setPreview(prev => prev.map(r => ({...r, accepted:false})));
+  const rejectExisting = () => setPreview(prev => prev.map(r => ({...r, accepted: !r.hasExisting})));
 
   const apply = () => {
     const newEntries = { ...entries };
-    preview.forEach(row => {
+    preview.filter(row => row.accepted).forEach(row => {
       let seg;
       if (entryType === "nonwork") {
         seg = [{ hours: 0, team: row.team, nonWork: nonWorkCode, nonWorkHours: Number(nonWorkHours), comment, swap }];
       } else if (entryType === "schedule") {
         seg = [{ hours: Number(workHours), team: workTeam, nonWork: "", nonWorkHours: 0, comment, swap }];
-      } else { // off — clear the entry
+      } else {
         newEntries[`${row.staffId}_${row.dateStr}`] = [];
         return;
       }
@@ -3533,62 +3748,82 @@ function BatchEntryModal({ staff, entries, updateEntries, nonWorkTypes, onClose 
 
         {step === "preview" && (
           <div>
-            <div style={{marginBottom:14}}>
-              <div style={{fontSize:14,fontWeight:700,color:"#374151",marginBottom:4}}>Preview — {preview.length} entries to create</div>
-              {overwrite && preview.some(r=>r.hasExisting) && (
-                <div style={{padding:"6px 10px",borderRadius:7,background:"#fef2f2",border:"1px solid #fca5a5",fontSize:11,color:"#dc2626",fontWeight:600,marginBottom:8}}>
-                  ⚠ {preview.filter(r=>r.hasExisting).length} existing entries will be overwritten
-                </div>
-              )}
-              <div style={{fontSize:12,color:"#6b7280"}}>
-                {entryType==="nonwork" && `${nonWorkCode} — ${nonWorkHours}h per day`}
-                {entryType==="schedule" && `Working ${workHours}h on ${workTeam}`}
-                {entryType==="off" && "Clearing entries (marking as not scheduled)"}
-                {" · "}{dates.length} days · {DAYS.filter((_,i)=>applyDays.includes(i)).join(", ")}
+            {/* Summary + bulk action bar */}
+            <div style={{marginBottom:10}}>
+              <div style={{fontSize:14,fontWeight:700,color:"#374151",marginBottom:6}}>
+                Review Changes — {preview.filter(r=>r.accepted).length} of {preview.length} accepted
+              </div>
+              <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:8}}>
+                <button onClick={acceptAll} style={{padding:"4px 12px",borderRadius:7,background:"#f0fdf4",border:"1px solid #86efac",color:"#15803d",fontSize:11,fontWeight:700,cursor:"pointer"}}>✓ Accept All</button>
+                <button onClick={rejectExisting} style={{padding:"4px 12px",borderRadius:7,background:"#fffbeb",border:"1px solid #fcd34d",color:"#92400e",fontSize:11,fontWeight:700,cursor:"pointer"}}>⚠ Skip Existing</button>
+                <button onClick={rejectAll} style={{padding:"4px 12px",borderRadius:7,background:"#fef2f2",border:"1px solid #fca5a5",color:"#dc2626",fontSize:11,fontWeight:700,cursor:"pointer"}}>✕ Reject All</button>
+                <span style={{marginLeft:"auto",fontSize:11,color:"#6b7280",alignSelf:"center"}}>
+                  {entryType==="nonwork" && `${nonWorkCode} ${nonWorkHours}h`}
+                  {entryType==="schedule" && `${workHours}h ${workTeam}`}
+                  {entryType==="off" && "Clear entries"}
+                </span>
               </div>
             </div>
 
-            <div style={{maxHeight:260,overflowY:"auto",border:"1px solid #e5e7eb",borderRadius:10,marginBottom:16}}>
+            <div style={{maxHeight:320,overflowY:"auto",border:"1px solid #e5e7eb",borderRadius:10,marginBottom:14}}>
               <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
-                <thead>
+                <thead style={{position:"sticky",top:0,zIndex:2}}>
                   <tr style={{background:"#f9fafb",borderBottom:"1px solid #e5e7eb"}}>
-                    <th style={{padding:"8px 12px",textAlign:"left",fontWeight:700,color:"#374151"}}>Staff</th>
-                    <th style={{padding:"8px 12px",textAlign:"left",fontWeight:700,color:"#374151"}}>Date</th>
-                    <th style={{padding:"8px 12px",textAlign:"left",fontWeight:700,color:"#374151"}}>Entry</th>
-                    <th style={{padding:"8px 12px",textAlign:"left",fontWeight:700,color:"#374151"}}>Status</th>
+                    <th style={{padding:"7px 10px",textAlign:"left",fontWeight:700,color:"#374151",fontSize:11}}>Staff</th>
+                    <th style={{padding:"7px 8px",textAlign:"left",fontWeight:700,color:"#374151",fontSize:11}}>Date</th>
+                    <th style={{padding:"7px 8px",textAlign:"left",fontWeight:700,color:"#6b7280",fontSize:11}}>Current</th>
+                    <th style={{padding:"7px 8px",textAlign:"left",fontWeight:700,color:"#1e3a5f",fontSize:11}}>New Entry</th>
+                    <th style={{padding:"7px 8px",textAlign:"center",fontWeight:700,color:"#374151",fontSize:11}}>Accept?</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {preview.slice(0,100).map((row,i) => {
+                  {preview.slice(0,200).map((row,i) => {
                     const tc = TEAM_COLORS[row.team];
+                    const existingSegs = row.existing || [];
+                    const existingLabel = existingSegs.length
+                      ? existingSegs.map(e => {
+                          const parts = [];
+                          if (Number(e.hours)>0) parts.push(`${e.hours}h ${e.team||row.team}`);
+                          if (e.nonWork) parts.push(`${e.nonWork}${e.nonWorkHours?` ${e.nonWorkHours}h`:""}`);
+                          return parts.join(" + ") || "—";
+                        }).join(", ")
+                      : "—";
                     return (
-                      <tr key={i} style={{borderBottom:"1px solid #f3f4f6",background:row.hasExisting?"#fff7ed":"#fff"}}>
-                        <td style={{padding:"6px 12px",fontWeight:600,color:"#111827"}}>
-                          <span style={{display:"inline-block",width:6,height:6,borderRadius:"50%",background:tc?.dot,marginRight:5}} />
+                      <tr key={i} style={{borderBottom:"1px solid #f3f4f6",background:!row.accepted?"#f9fafb":row.hasExisting?"#fff7ed":"#fff",opacity:row.accepted?1:0.5}}>
+                        <td style={{padding:"6px 10px",fontWeight:600,color:"#111827",whiteSpace:"nowrap"}}>
+                          <span style={{display:"inline-block",width:6,height:6,borderRadius:"50%",background:tc?.dot,marginRight:5,flexShrink:0}} />
                           {row.name}
                         </td>
-                        <td style={{padding:"6px 12px",color:"#374151"}}>
+                        <td style={{padding:"6px 8px",color:"#374151",whiteSpace:"nowrap"}}>
                           {new Date(row.dateStr+"T12:00:00").toLocaleDateString("en-US",{weekday:"short",month:"short",day:"numeric"})}
                         </td>
-                        <td style={{padding:"6px 12px"}}>
+                        <td style={{padding:"6px 8px",color:row.hasExisting?"#d97706":"#9ca3af",fontSize:11,maxWidth:120,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                          {existingLabel}
+                        </td>
+                        <td style={{padding:"6px 8px"}}>
                           {entryType==="nonwork" && <span style={{padding:"1px 7px",borderRadius:99,background:(nwInfo?.color||"#6b7280")+"22",color:nwInfo?.color||"#6b7280",fontWeight:700,fontSize:11}}>{nonWorkCode} {nonWorkHours}h</span>}
                           {entryType==="schedule" && <span style={{padding:"1px 7px",borderRadius:99,background:tc?.bg,color:tc?.text,fontWeight:700,fontSize:11}}>{workHours}h {workTeam}</span>}
                           {entryType==="off" && <span style={{fontSize:11,color:"#9ca3af"}}>— clear —</span>}
                         </td>
-                        <td style={{padding:"6px 12px",fontSize:11,color:row.hasExisting?"#d97706":"#15803d"}}>
-                          {row.hasExisting?"⚠ overwrites":"+ new"}
+                        <td style={{padding:"6px 8px",textAlign:"center"}}>
+                          <button onClick={()=>toggleAccept(i)} style={{
+                            width:26,height:26,borderRadius:6,border:"2px solid "+(row.accepted?"#22c55e":"#d1d5db"),
+                            background:row.accepted?"#22c55e":"#fff",color:row.accepted?"#fff":"#9ca3af",
+                            cursor:"pointer",fontWeight:800,fontSize:13,display:"inline-flex",alignItems:"center",justifyContent:"center"
+                          }}>{row.accepted?"✓":"✕"}</button>
                         </td>
                       </tr>
                     );
                   })}
-                  {preview.length > 100 && <tr><td colSpan={4} style={{padding:"8px 12px",textAlign:"center",color:"#9ca3af",fontSize:11}}>...and {preview.length-100} more</td></tr>}
+                  {preview.length > 200 && <tr><td colSpan={5} style={{padding:"8px 12px",textAlign:"center",color:"#9ca3af",fontSize:11}}>...and {preview.length-200} more rows</td></tr>}
                 </tbody>
               </table>
             </div>
             <div style={{display:"flex",gap:8}}>
               <button onClick={()=>setStep("setup")} style={{flex:1,padding:"10px",borderRadius:10,background:"#f3f4f6",border:"none",cursor:"pointer",fontSize:13,fontWeight:600}}>← Back</button>
-              <button onClick={apply} style={{flex:2,padding:"10px",borderRadius:10,background:"#1e3a5f",color:"#fff",border:"none",cursor:"pointer",fontSize:14,fontWeight:700}}>
-                Apply {preview.length} Entries →
+              <button onClick={apply} disabled={preview.filter(r=>r.accepted).length===0}
+                style={{flex:2,padding:"10px",borderRadius:10,background:preview.filter(r=>r.accepted).length===0?"#e5e7eb":"#1e3a5f",color:preview.filter(r=>r.accepted).length===0?"#9ca3af":"#fff",border:"none",cursor:preview.filter(r=>r.accepted).length===0?"not-allowed":"pointer",fontSize:14,fontWeight:700}}>
+                Apply {preview.filter(r=>r.accepted).length} Entries →
               </button>
             </div>
           </div>
