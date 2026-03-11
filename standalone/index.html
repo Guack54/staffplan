@@ -3822,16 +3822,32 @@ function BackupRestoreModal({ onClose, updateStaff, updateEntries, updateDailySt
         if (!newVisits[key]) newVisits[key] = { weekStart: String(weekStart) };
         newVisits[key][String(team)] = { evals: Number(evals)||0, visits: Number(visits)||0 };
       });
+      // Write ALL data directly to localStorage atomically first.
+      // Calling each update() separately causes race conditions where
+      // each triggerSave() fires with stale state and overwrites the others.
+      const finalNW     = newNW.length ? newNW : null;
+      const finalAlerts = Object.keys(newAlerts.fteTargets).length ? newAlerts : null;
+      const finalVisits = Object.keys(newVisits).length ? newVisits : {};
+      const saveDirect = (key, val) => { try { localStorage.setItem(key, JSON.stringify(val)); } catch(e) {} };
+      saveDirect("staffplan:staff",        newStaff);
+      saveDirect("staffplan:entries",      newEntries);
+      saveDirect("staffplan:dailyStats",   newDailyStats);
+      saveDirect("staffplan:pto",          newPTO);
+      saveDirect("staffplan:notes",        newNotes);
+      saveDirect("staffplan:visits",       finalVisits);
+      if (finalNW)     saveDirect("staffplan:nonWorkTypes", finalNW);
+      if (finalAlerts) saveDirect("staffplan:alerts",       finalAlerts);
+      // Now update React state so the UI reflects restored data immediately
       updateStaff(newStaff);
       updateEntries(newEntries);
       updateDailyStats(newDailyStats);
       updatePtoBalances(newPTO);
-      if (newNW.length) updateNonWorkTypes(newNW);
-      if (Object.keys(newAlerts.fteTargets).length) updateAlertSettings(newAlerts);
+      if (finalNW)     updateNonWorkTypes(finalNW);
+      if (finalAlerts) updateAlertSettings(finalAlerts);
       updateDayNotes(newNotes);
-      if (Object.keys(newVisits).length) updateVisitData(newVisits);
-      const visitWeekCount = Object.keys(newVisits).length;
-      setStatus({ok:true, msg:`✅ Restored! ${newStaff.length} staff · ${Object.keys(newEntries).length} schedule entries · ${Object.keys(newDailyStats).length} daily stats${visitWeekCount ? ` · ${visitWeekCount} visit weeks` : ""}.`});
+      updateVisitData(finalVisits);
+      const visitWeekCount = Object.keys(finalVisits).length;
+      setStatus({ok:true, msg:`✅ Restored! ${newStaff.length} staff · ${Object.keys(newEntries).length} schedule entries · ${Object.keys(newDailyStats).length} daily stats${visitWeekCount ? ` · ${visitWeekCount} visit weeks` : ""}. Reload the page to confirm everything saved.`});
     } catch(err) {
       setStatus({ok:false, msg:`❌ Restore failed: ${err.message}`});
     }
