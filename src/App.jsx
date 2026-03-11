@@ -481,11 +481,12 @@ export default function StaffingApp() {
     const wb = XLSX.utils.book_new();
 
     // Sheet 1: Staff
-    const staffRows = [["id","name","team","fte","defaultHours","shiftStart","shiftEnd","defaultSchedule"]];
+    const staffRows = [["id","name","team","fte","defaultHours","shiftStart","shiftEnd","defaultSchedule","notes"]];
     staff.forEach(s => staffRows.push([
       s.id, s.name, s.team, s.fte, s.defaultHours,
       s.shiftStart||"08:00", s.shiftEnd||"16:00",
-      JSON.stringify(s.defaultSchedule||[])
+      JSON.stringify(s.defaultSchedule||[]),
+      s.notes||""
     ]));
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(staffRows), "Staff");
 
@@ -787,7 +788,7 @@ export default function StaffingApp() {
           <Metric label="Shifts" value={weeklyMetrics.totalShifts} />
           <Metric label="Hours" value={weeklyMetrics.totalHours} />
           {nonWorkTypes.map(t => weeklyMetrics.nonWork[t.code] > 0 && (
-            <Metric key={t.code} label={t.label} value={weeklyMetrics.nonWork[t.code]+"h"} color={t.color} />
+            <Metric key={t.code} label={t.label} value={(weeklyMetrics.nonWork[t.code]/8 % 1 === 0 ? weeklyMetrics.nonWork[t.code]/8 : (weeklyMetrics.nonWork[t.code]/8).toFixed(1))+"d"} color={t.color} />
           ))}
         </div>}
       </div>
@@ -2132,7 +2133,7 @@ function CellEditor({ staffId, dateStr, staff, getEntry, setEntrySegments, nwMap
   const totalHrs = segs.reduce((a,sg)=>a+(Number(sg.hours)||0),0);
 
   return (
-    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.5)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:1000}} onClick={onClose}>
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.5)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:1000}}>
       <div style={{background:"#fff",borderRadius:16,padding:26,width:440,maxHeight:"90vh",overflow:"auto",boxShadow:"0 25px 60px rgba(0,0,0,0.2)"}} onClick={e=>e.stopPropagation()}>
         
         {/* Header */}
@@ -2981,7 +2982,7 @@ function VisitEntryModal({ visitData, updateVisitData, staff, weekStart, getDayF
   };
 
   return (
-    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.5)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:3000}} onClick={onClose}>
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.5)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:3000}}>
       <div style={{background:"#fff",borderRadius:18,padding:24,width:520,boxShadow:"0 25px 60px rgba(0,0,0,0.22)"}} onClick={e=>e.stopPropagation()}>
         {/* Header */}
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
@@ -3096,7 +3097,8 @@ function TimesheetTab({ staff, entries, weekStart, nonWorkTypes }) {
         const segs = raw ? (Array.isArray(raw)?raw:[raw]) : [];
         segs.forEach(e => {
           const wh = Number(e.hours)||0;
-          const nwh = Number(e.nonWorkHours)||0;
+          // Use nonWorkHours if set, fall back to hours field, then default 8h — same logic as weekly metrics
+          const nwh = e.nonWork ? (Number(e.nonWorkHours) || Number(e.hours) || 8) : 0;
           const team = e.team||s.team;
           if (wh>0) { byTeam[team]=(byTeam[team]||0)+wh; totalWork+=wh; }
           if (e.nonWork && nwh>0) { byNW[e.nonWork]=(byNW[e.nonWork]||0)+nwh; totalNW+=nwh; }
@@ -3314,6 +3316,7 @@ function StaffTab({ staff, updateStaff, entries, updateEntries, weekStart, nonWo
 
   const [nwOpenId, setNwOpenId] = useState(null); // which staff has time-off panel open
   const [carryFwdId, setCarryFwdId] = useState(null);
+  const [notesOpenId, setNotesOpenId] = useState(null);
   const [carryFwdWeeks, setCarryFwdWeeks] = useState(4);
 
   // Carry forward: apply default schedule for N weeks from today
@@ -3478,6 +3481,11 @@ function StaffTab({ staff, updateStaff, entries, updateEntries, weekStart, nonWo
                     style={{ background: carryFwdId===s.id?"#f0fdf4":"#f3f4f6", border:"1px solid "+(carryFwdId===s.id?"#86efac":"#e5e7eb"), borderRadius:6, color:carryFwdId===s.id?"#15803d":"#6b7280", fontWeight:700, cursor:"pointer", padding:"3px 10px", fontSize:11, whiteSpace:"nowrap" }}>
                     {carryFwdId===s.id?"▲ Hide":"📅 Forward"}
                   </button>
+                  <button onClick={() => setNotesOpenId(notesOpenId === s.id ? null : s.id)}
+                    title="Staff notes"
+                    style={{ background: notesOpenId===s.id?"#f5f3ff":"#f3f4f6", border:"1px solid "+(notesOpenId===s.id?"#c4b5fd":"#e5e7eb"), borderRadius:6, color:notesOpenId===s.id?"#6d28d9":"#6b7280", fontWeight:700, cursor:"pointer", padding:"3px 10px", fontSize:11, whiteSpace:"nowrap" }}>
+                    {notesOpenId===s.id?"▲ Hide":"📝 Notes"}{s.notes ? " •" : ""}
+                  </button>
                   {s.archived ? (
                     <button onClick={()=>remove(s.id)} title="Permanently delete"
                       style={{background:"#fee2e2",border:"none",borderRadius:6,color:"#dc2626",fontWeight:700,cursor:"pointer",padding:"3px 9px",fontSize:11,whiteSpace:"nowrap"}}>🗑 Delete</button>
@@ -3505,6 +3513,23 @@ function StaffTab({ staff, updateStaff, entries, updateEntries, weekStart, nonWo
                     </button>
                   </div>
                   <div style={{ fontSize:11, color:"#6b7280", marginTop:8 }}>Note: This fills in weeks that have no hours yet. Existing entries are not overwritten.</div>
+                </div>
+              )}
+
+              )}
+
+              {/* Staff Notes panel */}
+              {notesOpenId === s.id && (
+                <div style={{ borderTop:"1px solid #f3f4f6", padding:"14px 16px", background:"#faf5ff" }}>
+                  <div style={{ fontSize:12, fontWeight:700, color:"#6d28d9", marginBottom:8 }}>📝 Staff Notes</div>
+                  <textarea
+                    value={s.notes || ""}
+                    onChange={e => update(s.id, "notes", e.target.value)}
+                    placeholder="Add notes about this staff member — certifications, accommodations, performance notes, contact info, etc."
+                    rows={4}
+                    style={{ width:"100%", padding:"8px 10px", borderRadius:8, border:"1px solid #c4b5fd", fontSize:12, color:"#374151", resize:"vertical", fontFamily:"inherit", lineHeight:1.5, outline:"none", background:"#fff" }}
+                  />
+                  <div style={{ fontSize:10, color:"#9ca3af", marginTop:4 }}>Notes are saved automatically as you type and included in backups.</div>
                 </div>
               )}
 
@@ -3725,7 +3750,7 @@ function BatchEntryModal({ staff, entries, updateEntries, nonWorkTypes, onClose 
   const dates = getDatesInRange();
 
   return (
-    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.55)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:2000}} onClick={onClose}>
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.55)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:2000}}>
       <div style={{background:"#fff",borderRadius:18,padding:28,width:620,maxHeight:"90vh",overflow:"auto",boxShadow:"0 25px 60px rgba(0,0,0,0.25)"}} onClick={e=>e.stopPropagation()}>
 
         {/* Header */}
@@ -4005,7 +4030,8 @@ function BackupRestoreModal({ onClose, updateStaff, updateEntries, updateDailySt
         id:Number(r[0]), name:String(r[1]), team:String(r[2]),
         fte:Number(r[3])||1, defaultHours:Number(r[4])||8,
         shiftStart:r[5]||"08:00", shiftEnd:r[6]||"16:00",
-        defaultSchedule:(() => { try { return JSON.parse(r[7]||"[]"); } catch(e) { return []; } })()
+        defaultSchedule:(() => { try { return JSON.parse(r[7]||"[]"); } catch(e) { return []; } })(),
+        notes: r[8] ? String(r[8]) : ""
       }));
       const entryRows = sheetData("Entries");
       const newEntries = {};
