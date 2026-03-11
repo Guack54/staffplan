@@ -178,6 +178,7 @@ export default function StaffingApp() {
   const ptoBalancesRef = useRef(null);
   const dayNotesRef = useRef(null);
   const triggerSaveRef = useRef(null);
+  const isRestoringRef = useRef(false);
 
   const [unlocked, setUnlocked] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -231,6 +232,7 @@ export default function StaffingApp() {
 
   // Auto-save on changes (debounced)
   const triggerSave = useCallback((newStaff, newEntries, newDailyStats, newNonWork, newAlerts, newPTO, newNotes, newVisits) => {
+    if (isRestoringRef.current || window.__staffplanRestoring) return; // suppress saves during backup restore
     setSaveStatus("unsaved");
     if (saveTimer.current) clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(async () => {
@@ -3804,22 +3806,25 @@ function BackupRestoreModal({ onClose, updateStaff, updateEntries, updateDailySt
         if (!newVisits[key]) newVisits[key] = { weekStart: String(weekStart) };
         newVisits[key][String(team)] = { evals: Number(evals)||0, visits: Number(visits)||0 };
       });
-      // Write ALL data directly to localStorage atomically first.
-      // Calling each update() separately causes race conditions where
-      // each triggerSave() fires with stale state and overwrites the others.
       const finalNW     = newNW.length ? newNW : null;
       const finalAlerts = Object.keys(newAlerts.fteTargets).length ? newAlerts : null;
       const finalVisits = Object.keys(newVisits).length ? newVisits : {};
-      const saveDirect = (key, val) => { try { localStorage.setItem(key, JSON.stringify(val)); } catch(e) {} };
-      saveDirect("staffplan:staff",        newStaff);
-      saveDirect("staffplan:entries",      newEntries);
-      saveDirect("staffplan:dailyStats",   newDailyStats);
-      saveDirect("staffplan:pto",          newPTO);
-      saveDirect("staffplan:notes",        newNotes);
-      saveDirect("staffplan:visits",       finalVisits);
-      if (finalNW)     saveDirect("staffplan:nonWorkTypes", finalNW);
-      if (finalAlerts) saveDirect("staffplan:alerts",       finalAlerts);
-      // Now update React state so the UI reflects restored data immediately
+      // Save ALL keys directly via saveToStorage (handles both Claude and localStorage)
+      // and await every promise so nothing races or gets overwritten
+      await Promise.all([
+        saveToStorage("staffplan:staff",        newStaff),
+        saveToStorage("staffplan:entries",      newEntries),
+        saveToStorage("staffplan:dailyStats",   newDailyStats),
+        saveToStorage("staffplan:pto",          newPTO),
+        saveToStorage("staffplan:notes",        newNotes),
+        saveToStorage("staffplan:visits",       finalVisits),
+        finalNW     ? saveToStorage("staffplan:nonWorkTypes", finalNW)     : Promise.resolve(),
+        finalAlerts ? saveToStorage("staffplan:alerts",       finalAlerts) : Promise.resolve(),
+      ]);
+      // Update React state AFTER storage is confirmed written.
+      // isRestoringRef suppresses triggerSave so state updates don't overwrite storage.
+      // Pass flag setter via a custom event since modal doesn't have direct ref access.
+      window.__staffplanRestoring = true;
       updateStaff(newStaff);
       updateEntries(newEntries);
       updateDailyStats(newDailyStats);
@@ -3828,8 +3833,9 @@ function BackupRestoreModal({ onClose, updateStaff, updateEntries, updateDailySt
       if (finalAlerts) updateAlertSettings(finalAlerts);
       updateDayNotes(newNotes);
       updateVisitData(finalVisits);
+      window.__staffplanRestoring = false;
       const visitWeekCount = Object.keys(finalVisits).length;
-      setStatus({ok:true, msg:`✅ Restored! ${newStaff.length} staff · ${Object.keys(newEntries).length} schedule entries · ${Object.keys(newDailyStats).length} daily stats${visitWeekCount ? ` · ${visitWeekCount} visit weeks` : ""}. Reload the page to confirm everything saved.`});
+      setStatus({ok:true, msg:`✅ Restored! ${newStaff.length} staff · ${Object.keys(newEntries).length} schedule entries · ${Object.keys(newDailyStats).length} daily stats${visitWeekCount ? ` · ${visitWeekCount} visit weeks` : ""}. Data saved — you can close and reopen safely.`});
     } catch(err) {
       setStatus({ok:false, msg:`❌ Restore failed: ${err.message}`});
     }
