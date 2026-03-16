@@ -2423,7 +2423,7 @@ function WeekGrid({ filteredStaff, weekDates, getEntry, getDayFTE, nwMap, setEdi
                   boxShadow:"0 8px 24px rgba(0,0,0,0.15)",padding:"10px 12px",marginTop:2}}>
                   <div style={{fontSize:11,fontWeight:800,color:"#dc2626",marginBottom:8}}>Hour Mismatches This Week</div>
                   <div style={{maxHeight:240,overflowY:"auto",display:"flex",flexDirection:"column",gap:6}}>
-                    {hourMismatches.map(({s, standardTotal, enteredTotal, diff, dayMismatches}) => {
+                    {hourMismatches.map(({s, standardTotal, enteredTotal, diff, dayMismatches, debugDays}) => {
                       const tc = TEAM_COLORS[s.team];
                       const isUnder = diff < 0;
                       const isOver = diff > 0;
