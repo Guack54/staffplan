@@ -2791,7 +2791,10 @@ function CellEditor({ staffId, dateStr, staff, getEntry, setEntrySegments, nwMap
   const updateSeg = (i, field, value) => setSegs(prev => prev.map((sg, idx) => {
     if (idx !== i) return sg;
     const updated = { ...sg, [field]: value };
-    const staffDefaultHrs = s?.defaultHours || 8;
+    // Use actual scheduled hours for this day of week from defaultSchedule
+    const dow = new Date(dateStr + "T12:00:00").getDay();
+    const schedEntry = s?.defaultSchedule?.find(d => Number(d.day) === dow);
+    const staffDefaultHrs = schedEntry ? (Number(schedEntry.hours) || 0) : 8;
     // Auto-adjust work hours when NW code or NW hours change
     if (field === "nonWork") {
       if (value) {
