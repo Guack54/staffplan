@@ -2343,14 +2343,23 @@ function WeekGrid({ filteredStaff, weekDates, getEntry, getDayFTE, nwMap, setEdi
         // Use getEntry to check if a real entry exists — avoids needing entries in scope
         const segsCheck = getEntry(s.id, ds);
         const hasRealEntry = segsCheck.some(e => Number(e.hours) > 0 || e.nonWork);
-        const dayEntered = segsCheck.reduce((a, e) => {
+        // Count all hours for the day: worked hours + non-work hours
+        // Non-work hours: use nonWorkHours first, then hours, then standardDayHrs as fallback
+        // This handles all entry paths (CellEditor, Batch, Bulk)
+        let workedHrs = 0;
+        let nonWorkHrs = 0;
+        segsCheck.forEach(e => {
           if (e.nonWork) {
             const nwh = Number(e.nonWorkHours);
-            const eh = Number(e.hours);
-            return a + (nwh > 0 ? nwh : eh > 0 ? eh : standardDayHrs > 0 ? standardDayHrs : 8);
+            const eh  = Number(e.hours);
+            // If nonWorkHours explicitly set, use it
+            // If not, fall back to hours, then to standardDayHrs
+            nonWorkHrs += nwh > 0 ? nwh : eh > 0 ? eh : standardDayHrs > 0 ? standardDayHrs : 8;
+          } else {
+            workedHrs += Number(e.hours) || 0;
           }
-          return a + (Number(e.hours) || 0);
-        }, 0);
+        });
+        const dayEntered = workedHrs + nonWorkHrs;
         enteredTotal += dayEntered;
         if (standardDayHrs > 0 && !hasRealEntry) {
           dayMismatches.push({ date, ds, expected: standardDayHrs, entered: 0, type: "missing" });
@@ -2424,9 +2433,8 @@ function WeekGrid({ filteredStaff, weekDates, getEntry, getDayFTE, nwMap, setEdi
                               ))}
                             </div>
                           )}
-                          {/* Debug: show raw segment data for this staff member */}
                           <div style={{marginTop:4,fontSize:8,color:"#9ca3af"}}>
-                            {"Entered: " + enteredTotal + "h, Standard: " + standardTotal + "h, Diff: " + diff + "h"}
+                            {"Total entered: " + enteredTotal + "h (work + non-work) vs standard: " + standardTotal + "h"}
                           </div>
                         </div>
                       );
