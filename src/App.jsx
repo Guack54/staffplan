@@ -18,6 +18,15 @@ const DEFAULT_NON_WORK = [
   { code: "UNPL", label: "Unpaid", color: "#e11d48" },
 ];
 const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const DEFAULT_LOCATIONS = [
+  { id: 1, team: "Acute",  name: "4 East" },
+  { id: 2, team: "Acute",  name: "4 West" },
+  { id: 3, team: "Acute",  name: "5 North" },
+  { id: 4, team: "Rehab",  name: "Gym" },
+  { id: 5, team: "Rehab",  name: "Outpatient" },
+  { id: 6, team: "Peds",   name: "NICU" },
+  { id: 7, team: "Peds",   name: "PICU" },
+];
 // fteTargets: { Rehab: { 0:2,1:3,2:3,3:3,4:3,5:3,6:2 }, ... }  (0=Sun,6=Sat)
 const DEFAULT_FTE_TARGETS = {
   Rehab: { 0:2.0, 1:3.0, 2:3.0, 3:3.0, 4:3.0, 5:3.0, 6:2.0 },
@@ -121,39 +130,378 @@ const sel = { ...inp, background:"#fff", cursor:"pointer" };
 const thS = { padding:"10px 8px", textAlign:"center", fontWeight:700, fontSize:11, borderBottom:"2px solid #e5e7eb", color:"#374151" };
 const tdS = { padding:"3px 4px", verticalAlign:"middle" };
 
-// ─── Storage helpers (Claude.ai storage with localStorage fallback) ───────────
-const hasClaudeStorage = () => typeof window !== "undefined" && window.storage && typeof window.storage.get === "function";
+// ─── Supabase client ──────────────────────────────────────────────────────────
+const SUPABASE_URL = "https://ouwertzfrcytkbvypmda.supabase.co";
+const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im91d2VydHpmcmN5dGtidnlwbWRhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzMyNzE1NzcsImV4cCI6MjA4ODg0NzU3N30.It7k5LvnUzHf5pQWngg6N_Hg1bN0oVX9ZnGkUOrhXMA";
 
-async function saveToStorage(key, value) {
-  const str = JSON.stringify(value);
-  if (hasClaudeStorage()) {
-    try { await window.storage.set(key, str); return; } catch(e) {}
+// Lazy-load the Supabase JS client from CDN
+let _sb = null;
+async function getSB() {
+  if (_sb) return _sb;
+  if (!window.supabase) {
+    await new Promise((res, rej) => {
+      const s = document.createElement("script");
+      s.src = "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js";
+      s.onload = res; s.onerror = rej;
+      document.head.appendChild(s);
+    });
   }
-  try { localStorage.setItem(key, str); } catch(e) { console.warn("Storage save failed:", e); }
+  _sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+    auth: { persistSession: true, autoRefreshToken: true }
+  });
+  return _sb;
 }
 
+// ─── Auth helpers ─────────────────────────────────────────────────────────────
+async function sbSignIn(email, password) {
+  const sb = await getSB();
+  const { data, error } = await sb.auth.signInWithPassword({ email, password });
+  if (error) throw error;
+  return data;
+}
+
+async function sbSignOut() {
+  const sb = await getSB();
+  await sb.auth.signOut();
+}
+
+async function sbGetSession() {
+  const sb = await getSB();
+  const { data } = await sb.auth.getSession();
+  return data.session;
+}
+
+async function sbGetProfile(userId) {
+  const sb = await getSB();
+  const { data, error } = await sb.from("user_profiles").select("*").eq("id", userId).single();
+  if (error) return null;
+  return data;
+}
+
+async function sbUpdatePassword(newPassword) {
+  const sb = await getSB();
+  const { error } = await sb.auth.updateUser({ password: newPassword });
+  if (error) throw error;
+}
+
+// ── Usage Analytics ──────────────────────────────────────────────────────────
+async function trackEvent(userId, userEmail, eventType, payload = {}) {
+  try {
+    const sb = await getSB();
+    await sb.from("usage_events").insert({
+      user_id: userId,
+      user_email: userEmail,
+      event_type: eventType,
+      payload,
+      created_at: new Date().toISOString(),
+    });
+  } catch (_) { /* best-effort — never throw */ }
+}
+
+async function sbLoadUsageEvents() {
+  try {
+    const sb = await getSB();
+    const since = new Date(); since.setDate(since.getDate() - 90);
+    const { data } = await sb.from("usage_events")
+      .select("*")
+      .gte("created_at", since.toISOString())
+      .order("created_at", { ascending: false })
+      .limit(5000);
+    return data || [];
+  } catch (_) { return []; }
+}
+
+// ─── Data loaders ─────────────────────────────────────────────────────────────
+async function sbLoadStaff() {
+  const sb = await getSB();
+  const { data, error } = await sb.from("staff").select("*").order("id");
+  if (error || !data?.length) return null;
+  return data.map(r => ({
+    id: r.id, name: r.name, team: r.team, fte: r.fte,
+    defaultHours: r.default_hours, shiftStart: r.shift_start, shiftEnd: r.shift_end,
+    defaultSchedule: r.default_schedule || [], notes: r.notes || "", archived: r.archived || false,
+  }));
+}
+
+async function sbLoadEntries() {
+  const sb = await getSB();
+  const out = {};
+  const pageSize = 1000;
+  let from = 0;
+  while (true) {
+    const { data, error } = await sb.from("entries").select("*").range(from, from + pageSize - 1);
+    if (error) return null;
+    if (!data || data.length === 0) break;
+    data.forEach(r => { out[`${r.staff_id}_${r.date_str}`] = r.segments || []; });
+    if (data.length < pageSize) break;
+    from += pageSize;
+  }
+  return Object.keys(out).length ? out : null;
+}
+
+async function sbLoadDailyStats() {
+  const sb = await getSB();
+  const out = {};
+  const pageSize = 1000;
+  let from = 0;
+  while (true) {
+    const { data, error } = await sb.from("daily_stats").select("*").range(from, from + pageSize - 1);
+    if (error) return null;
+    if (!data || data.length === 0) break;
+    data.forEach(r => { out[r.date_str] = r.data; });
+    if (data.length < pageSize) break;
+    from += pageSize;
+  }
+  return Object.keys(out).length ? out : null;
+}
+
+async function sbLoadPTO() {
+  const sb = await getSB();
+  const { data, error } = await sb.from("pto_balances").select("*");
+  if (error || !data) return null;
+  const out = {};
+  data.forEach(r => { out[String(r.staff_id)] = r.data; });
+  return out;
+}
+
+async function sbLoadNotes() {
+  const sb = await getSB();
+  const { data, error } = await sb.from("day_notes").select("*");
+  if (error || !data) return null;
+  const out = {};
+  data.forEach(r => { out[r.date_str] = r.note; });
+  return out;
+}
+
+async function sbLoadVisits() {
+  const sb = await getSB();
+  const { data, error } = await sb.from("visit_data").select("*");
+  if (error || !data) return null;
+  const out = {};
+  data.forEach(r => { out[r.week_key] = { weekStart: r.week_start, ...r.data }; });
+  return out;
+}
+
+async function sbLoadNonWorkTypes() {
+  const sb = await getSB();
+  const { data, error } = await sb.from("non_work_types").select("*").order("sort_order");
+  if (error || !data?.length) return null;
+  return data.map(r => ({ code: r.code, label: r.label, color: r.color }));
+}
+
+async function sbLoadAlertSettings() {
+  const sb = await getSB();
+  const { data, error } = await sb.from("alert_settings").select("*");
+  if (error || !data?.length) return null;
+  const out = {};
+  data.forEach(r => { out[r.key] = r.data; });
+  return (out.fteTargets && out.censusTargets)
+    ? { fteTargets: out.fteTargets, censusTargets: out.censusTargets }
+    : null;
+}
+
+// ─── Data savers ──────────────────────────────────────────────────────────────
+async function sbSaveStaff(staffArr) {
+  const sb = await getSB();
+  // Deduplicate by rounded ID — keep last occurrence
+  const seen = new Map();
+  staffArr.forEach(s => seen.set(String(s.id), s));
+  const rows = Array.from(seen.values()).map(s => ({
+    id: String(s.id), name: s.name, team: s.team, fte: s.fte,
+    default_hours: s.defaultHours, shift_start: s.shiftStart || "08:00",
+    shift_end: s.shiftEnd || "16:00", default_schedule: s.defaultSchedule || [],
+    notes: s.notes || "", archived: s.archived || false, updated_at: new Date().toISOString(),
+  }));
+  const { error } = await sb.from("staff").upsert(rows, { onConflict: "id" });
+  if (error) throw new Error(`Staff save failed: ${error.message}`);
+}
+
+async function sbSaveEntry(staffId, dateStr, segments) {
+  const sb = await getSB();
+  await sb.from("entries").upsert(
+    { staff_id: staffId, date_str: dateStr, segments, updated_at: new Date().toISOString() },
+    { onConflict: "staff_id,date_str" }
+  );
+}
+
+async function sbSaveEntries(entriesObj) {
+  const sb = await getSB();
+  const rows = [];
+  Object.entries(entriesObj).forEach(([key, segs]) => {
+    // key format is staffId_YYYY-MM-DD — split on first underscore only
+    const underscoreIdx = key.indexOf("_");
+    if (underscoreIdx === -1) return;
+    const staffId = key.substring(0, underscoreIdx);
+    const dateStr = key.substring(underscoreIdx + 1);
+    if (isNaN(staffId) || !dateStr || !dateStr.match(/^\d{4}-\d{2}-\d{2}$/)) return;
+    rows.push({ staff_id: String(staffId), date_str: dateStr, segments: segs || [], updated_at: new Date().toISOString() });
+  });
+  if (!rows.length) return;
+  // Deduplicate by staff_id+date_str — keep last occurrence
+  const seen = new Map();
+  rows.forEach(r => seen.set(`${String(r.staff_id)}_${r.date_str}`, r));
+  const deduped = Array.from(seen.values());
+  // Batch in chunks of 200 to avoid request size limits
+  for (let i = 0; i < deduped.length; i += 200) {
+    const { error } = await sb.from("entries").upsert(deduped.slice(i, i+200), { onConflict: "staff_id,date_str" });
+    if (error) throw new Error(`Entries save failed: ${error.message}`);
+  }
+}
+
+async function sbSaveDailyStats(statsObj) {
+  const sb = await getSB();
+  const rows = Object.entries(statsObj).map(([date_str, data]) => ({
+    date_str, data, updated_at: new Date().toISOString()
+  }));
+  if (!rows.length) return;
+  for (let i = 0; i < rows.length; i += 500) {
+    await sb.from("daily_stats").upsert(rows.slice(i, i+500), { onConflict: "date_str" });
+  }
+}
+
+async function sbSavePTO(ptoObj) {
+  const sb = await getSB();
+  const rows = Object.entries(ptoObj).map(([staff_id, data]) => ({
+    staff_id: String(staff_id), data, updated_at: new Date().toISOString()
+  })).filter(r => !isNaN(r.staff_id));
+  if (!rows.length) return;
+  await sb.from("pto_balances").upsert(rows, { onConflict: "staff_id" });
+}
+
+async function sbSaveNotes(notesObj) {
+  const sb = await getSB();
+  const rows = Object.entries(notesObj).map(([date_str, note]) => ({
+    date_str, note, updated_at: new Date().toISOString()
+  }));
+  if (!rows.length) return;
+  for (let i = 0; i < rows.length; i += 500) {
+    await sb.from("day_notes").upsert(rows.slice(i, i+500), { onConflict: "date_str" });
+  }
+}
+
+async function sbSaveVisits(visitsObj) {
+  const sb = await getSB();
+  const rows = Object.entries(visitsObj).map(([week_key, rec]) => {
+    const { weekStart, ...data } = rec;
+    return { week_key, week_start: weekStart || week_key.replace("week_",""), data, updated_at: new Date().toISOString() };
+  });
+  if (!rows.length) return;
+  await sb.from("visit_data").upsert(rows, { onConflict: "week_key" });
+}
+
+async function sbSaveNonWorkTypes(nwArr, sb_) {
+  const sb = sb_ || await getSB();
+  await sb.from("non_work_types").delete().neq("code", "___never___");
+  const rows = nwArr.map((n, i) => ({ code: n.code, label: n.label, color: n.color, sort_order: i }));
+  await sb.from("non_work_types").insert(rows);
+}
+
+async function sbSaveAlertSettings(alertObj) {
+  const sb = await getSB();
+  await sb.from("alert_settings").upsert([
+    { key: "fteTargets", data: alertObj.fteTargets, updated_at: new Date().toISOString() },
+    { key: "censusTargets", data: alertObj.censusTargets, updated_at: new Date().toISOString() },
+  ], { onConflict: "key" });
+}
+
+// ─── Realtime subscription ────────────────────────────────────────────────────
+let _realtimeChannel = null;
+async function subscribeRealtime(onStaffChange, onEntriesChange, onStatsChange, onVisitsChange) {
+  const sb = await getSB();
+  if (_realtimeChannel) { sb.removeChannel(_realtimeChannel); }
+  _realtimeChannel = sb.channel("staffplan-realtime")
+    .on("postgres_changes", { event: "*", schema: "public", table: "staff" }, onStaffChange)
+    .on("postgres_changes", { event: "*", schema: "public", table: "entries" }, onEntriesChange)
+    .on("postgres_changes", { event: "*", schema: "public", table: "daily_stats" }, onStatsChange)
+    .on("postgres_changes", { event: "*", schema: "public", table: "visit_data" }, onVisitsChange)
+    .subscribe();
+}
+
+// ─── Legacy localStorage fallback (kept for backup/restore) ──────────────────
+const hasClaudeStorage = () => typeof window !== "undefined" && window.storage && typeof window.storage.get === "function";
+async function saveToStorage(key, value) {
+  const str = JSON.stringify(value);
+  if (hasClaudeStorage()) { try { await window.storage.set(key, str); return; } catch(e) {} }
+  try { localStorage.setItem(key, str); } catch(e) {}
+}
 async function loadFromStorage(key, fallback) {
-  // Check preloaded snapshot data first (for published versions)
   if (typeof PRELOADED_DATA !== "undefined" && PRELOADED_DATA[key] !== undefined) {
     try { return JSON.parse(PRELOADED_DATA[key]); } catch(e) {}
   }
-  if (hasClaudeStorage()) {
-    try { const r = await window.storage.get(key); return r ? JSON.parse(r.value) : fallback; } catch(e) {}
-  }
+  if (hasClaudeStorage()) { try { const r = await window.storage.get(key); return r ? JSON.parse(r.value) : fallback; } catch(e) {} }
   try { const v = localStorage.getItem(key); return v ? JSON.parse(v) : fallback; } catch(e) {}
   return fallback;
 }
 
+// ─── Login Screen ────────────────────────────────────────────────────────────
+function LoginScreen({ onLogin }) {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  const handleLogin = async () => {
+    if (!email || !password) { setError("Please enter your email and password."); return; }
+    setLoading(true); setError("");
+    try {
+      const data = await sbSignIn(email, password);
+      const profile = await sbGetProfile(data.user.id);
+      if (!profile) throw new Error("Account not set up correctly. Contact your administrator.");
+      onLogin({ ...data.user, profile });
+    } catch(e) {
+      setError(e.message || "Login failed. Check your email and password.");
+    } finally { setLoading(false); }
+  };
+
+  return (
+    <div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",background:"linear-gradient(135deg,#0f2744 0%,#1e3a5f 60%,#1e4d8c 100%)"}}>
+      <div style={{background:"#fff",borderRadius:20,padding:"40px 36px",width:380,boxShadow:"0 30px 80px rgba(0,0,0,0.35)"}}>
+        <div style={{textAlign:"center",marginBottom:28}}>
+          <div style={{fontSize:28,fontWeight:800,color:"#1e3a5f",letterSpacing:"-0.02em"}}>StaffPlan</div>
+          <div style={{fontSize:12,color:"#6b7280",marginTop:4}}>Department Staffing & Planning</div>
+        </div>
+        <div style={{marginBottom:14}}>
+          <label style={{fontSize:12,fontWeight:600,color:"#374151",display:"block",marginBottom:5}}>Email</label>
+          <input type="email" value={email} onChange={e=>setEmail(e.target.value)}
+            onKeyDown={e=>e.key==="Enter"&&handleLogin()}
+            placeholder="your@email.com"
+            style={{width:"100%",padding:"10px 12px",borderRadius:9,border:"1px solid #d1d5db",fontSize:14,outline:"none"}} />
+        </div>
+        <div style={{marginBottom:20}}>
+          <label style={{fontSize:12,fontWeight:600,color:"#374151",display:"block",marginBottom:5}}>Password</label>
+          <input type="password" value={password} onChange={e=>setPassword(e.target.value)}
+            onKeyDown={e=>e.key==="Enter"&&handleLogin()}
+            placeholder="••••••••"
+            style={{width:"100%",padding:"10px 12px",borderRadius:9,border:"1px solid #d1d5db",fontSize:14,outline:"none"}} />
+        </div>
+        {error && <div style={{padding:"8px 12px",borderRadius:8,background:"#fef2f2",color:"#dc2626",fontSize:12,fontWeight:600,marginBottom:14}}>{error}</div>}
+        <button onClick={handleLogin} disabled={loading}
+          style={{width:"100%",padding:"12px",borderRadius:10,background:loading?"#93c5fd":"#1e3a5f",color:"#fff",border:"none",fontWeight:700,fontSize:15,cursor:loading?"not-allowed":"pointer"}}>
+          {loading ? "Signing in..." : "Sign In →"}
+        </button>
+        <div style={{textAlign:"center",marginTop:16,fontSize:11,color:"#9ca3af"}}>
+          Contact your administrator to get access.
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Main App ─────────────────────────────────────────────────────────────────
 export default function StaffingApp() {
+  const [currentUser, setCurrentUser] = useState(null); // { id, email, profile: {role, display_name} }
+  const [authChecked, setAuthChecked] = useState(false);
+
   const [weekStart, setWeekStart] = useState(() => startOfWeek(new Date()));
   const [entries, setEntries] = useState({});
   const [dailyStats, setDailyStats] = useState({});
-  const [staff, setStaff] = useState(INITIAL_STAFF);
+  const [staff, setStaff] = useState([]);
   const [nonWorkTypes, setNonWorkTypes] = useState(DEFAULT_NON_WORK);
+  const [locations, setLocations] = useState(DEFAULT_LOCATIONS);
   const [editingCell, setEditingCell] = useState(null);
   const [drillDay, setDrillDay] = useState(null);
   const [activeTab, setActiveTab] = useState("grid");
+  const tabEnteredAt = useRef(Date.now());
   const [filterTeam, setFilterTeam] = useState("All");
   const [editingName, setEditingName] = useState(null);
   const [tempName, setTempName] = useState("");
@@ -162,64 +510,101 @@ export default function StaffingApp() {
   const [showArchivedManager, setShowArchivedManager] = useState(false);
   const [showVisitEntry, setShowVisitEntry] = useState(false);
   const [showStaffManager, setShowStaffManager] = useState(false);
-  const [visitData, setVisitData] = useState({}); // { "2026-W10": { Rehab:{evals:0,visits:0}, Peds:{...}, Acute:{...}, weekStart:"2026-03-03" } }
+  const [visitData, setVisitData] = useState({});
   const [showNonWorkEditor, setShowNonWorkEditor] = useState(false);
   const [yearView, setYearView] = useState(new Date().getFullYear());
   const [loaded, setLoaded] = useState(false);
-  const [saveStatus, setSaveStatus] = useState("saved"); // saved | saving | unsaved
+  const [saveStatus, setSaveStatus] = useState("saved");
+  const [showUserManager, setShowUserManager] = useState(false);
+  const [showLocationEditor, setShowLocationEditor] = useState(false);
   const saveTimer = useRef(null);
-  const xlsxRef = useRef(null); // SheetJS loaded dynamically
-  const historyStack = useRef([]); // [{staff,entries,dailyStats}, ...]
+  const xlsxRef = useRef(null);
+  const historyStack = useRef([]);
   const [canUndo, setCanUndo] = useState(false);
-  // Refs so undo callback is stable and doesn't cause re-render chains
-  // Initialized to null — synced on every render below (after state is declared)
   const nonWorkTypesRef = useRef(null);
   const alertSettingsRef = useRef(null);
   const ptoBalancesRef = useRef(null);
   const dayNotesRef = useRef(null);
   const triggerSaveRef = useRef(null);
   const isRestoringRef = useRef(false);
+  const realtimeDebounce = useRef({});
 
-  const [unlocked, setUnlocked] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [showPwManager, setShowPwManager] = useState(false);
   const [compactMode, setCompactMode] = useState(false);
   const [showAlertsEditor, setShowAlertsEditor] = useState(false);
   const [showBatchEntry, setShowBatchEntry] = useState(false);
   const [alertSettings, setAlertSettings] = useState({ fteTargets: DEFAULT_FTE_TARGETS, censusTargets: DEFAULT_CENSUS_TARGETS });
-  const [ptoBalances, setPtoBalances] = useState({}); // { staffId: { VAC: 80, SICK: 40 } }
-  const [dayNotes, setDayNotes] = useState({});       // { dateStr: "note text" }
+  const [ptoBalances, setPtoBalances] = useState({});
+  const [dayNotes, setDayNotes] = useState({});
   const [dayView, setDayView] = useState(() => { const d = new Date(); d.setHours(0,0,0,0); return d; });
   const [monthView, setMonthView] = useState(() => { const d = new Date(); return { year: d.getFullYear(), month: d.getMonth() }; });
   const menuRef = useRef(null);
 
-  // Load from storage on mount
+  const userRole = currentUser?.profile?.role || "viewer";
+  const canEdit = userRole === "admin" || userRole === "manager";
+  const isAdmin = userRole === "admin";
+
+  // ── Check existing session on mount ──
   useEffect(() => {
     (async () => {
-      const [savedStaff, savedEntries, savedDailyStats, savedNonWork, savedPwHash,
-             savedAlerts, savedPTO, savedNotes, savedVisits] = await Promise.all([
-        loadFromStorage("staffplan:staff", INITIAL_STAFF),
-        loadFromStorage("staffplan:entries", {}),
-        loadFromStorage("staffplan:dailyStats", {}),
-        loadFromStorage("staffplan:nonWorkTypes", DEFAULT_NON_WORK),
-        loadFromStorage("staffplan:pwHash", null),
-        loadFromStorage("staffplan:alerts", { fteTargets: DEFAULT_FTE_TARGETS, censusTargets: DEFAULT_CENSUS_TARGETS }),
-        loadFromStorage("staffplan:pto", {}),
-        loadFromStorage("staffplan:notes", {}),
-        loadFromStorage("staffplan:visits", {}),
-      ]);
-      setStaff(savedStaff);
-      setEntries(savedEntries);
-      setDailyStats(savedDailyStats);
-      setNonWorkTypes(savedNonWork);
-      setAlertSettings(savedAlerts);
-      setPtoBalances(savedPTO);
-      setDayNotes(savedNotes);
-      if (savedVisits) setVisitData(savedVisits);
-      if (!savedPwHash) setUnlocked(true);
-      setLoaded(true);
+      try {
+        const session = await sbGetSession();
+        if (session?.user) {
+          const profile = await sbGetProfile(session.user.id);
+          if (profile) setCurrentUser({ ...session.user, profile });
+        }
+      } catch(e) {}
+      setAuthChecked(true);
     })();
   }, []);
+
+  // ── Load all data from Supabase once logged in ──
+  useEffect(() => {
+    if (!currentUser) return;
+    (async () => {
+      try {
+        const [sbStaff, sbEntries, sbStats, sbNW, sbAlerts, sbPTO, sbNotes, sbVisits] = await Promise.all([
+          sbLoadStaff(), sbLoadEntries(), sbLoadDailyStats(),
+          sbLoadNonWorkTypes(), sbLoadAlertSettings(), sbLoadPTO(),
+          sbLoadNotes(), sbLoadVisits(),
+        ]);
+        if (sbStaff)   setStaff(sbStaff);
+        if (sbEntries) setEntries(sbEntries);
+        if (sbStats)   setDailyStats(sbStats);
+        if (sbNW)      setNonWorkTypes(sbNW);
+        if (sbAlerts)  setAlertSettings(sbAlerts);
+        const savedLocs = await loadFromStorage("staffplan:locations", DEFAULT_LOCATIONS);
+        if (savedLocs) setLocations(savedLocs);
+        if (sbPTO)     setPtoBalances(sbPTO);
+        if (sbNotes)   setDayNotes(sbNotes);
+        if (sbVisits)  setVisitData(sbVisits);
+      } catch(e) { console.error("Load error:", e); }
+      setLoaded(true);
+    })();
+  }, [currentUser]);
+
+  // ── Real-time subscriptions ──
+  useEffect(() => {
+    if (!currentUser) return;
+    const debounce = (key, fn, ms=800) => {
+      if (realtimeDebounce.current[key]) clearTimeout(realtimeDebounce.current[key]);
+      realtimeDebounce.current[key] = setTimeout(fn, ms);
+    };
+    subscribeRealtime(
+      () => debounce("staff", async () => { const d=await sbLoadStaff(); if(d) setStaff(d); }),
+      (payload) => {
+        // For entries, update just the changed row instead of reloading everything
+        const r = payload.new;
+        if (r && r.staff_id && r.date_str) {
+          setEntries(prev => ({ ...prev, [`${r.staff_id}_${r.date_str}`]: r.segments || [] }));
+        }
+      },
+      () => debounce("stats", async () => { const d=await sbLoadDailyStats(); if(d) setDailyStats(d); }),
+      () => debounce("visits", async () => { const d=await sbLoadVisits(); if(d) setVisitData(d); }),
+    );
+    return () => { if (_realtimeChannel) getSB().then(sb => sb.removeChannel(_realtimeChannel)); };
+  }, [currentUser]);
 
   // Load SheetJS dynamically
   useEffect(() => {
@@ -230,26 +615,29 @@ export default function StaffingApp() {
     document.head.appendChild(script);
   }, []);
 
-  // Auto-save on changes (debounced)
+  // Auto-save on changes (debounced) — saves to Supabase
   const triggerSave = useCallback((newStaff, newEntries, newDailyStats, newNonWork, newAlerts, newPTO, newNotes, newVisits) => {
-    if (isRestoringRef.current || window.__staffplanRestoring) return; // suppress saves during backup restore
+    if (isRestoringRef.current || window.__staffplanRestoring) return;
+    if (!canEdit) return; // viewers cannot save
     setSaveStatus("unsaved");
     if (saveTimer.current) clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(async () => {
       setSaveStatus("saving");
-      await Promise.all([
-        saveToStorage("staffplan:staff", newStaff),
-        saveToStorage("staffplan:entries", newEntries),
-        saveToStorage("staffplan:dailyStats", newDailyStats),
-        saveToStorage("staffplan:nonWorkTypes", newNonWork),
-        saveToStorage("staffplan:alerts", newAlerts),
-        saveToStorage("staffplan:pto", newPTO),
-        saveToStorage("staffplan:notes", newNotes),
-        saveToStorage("staffplan:visits", newVisits ?? visitData),
-      ]);
-      setSaveStatus("saved");
+      try {
+        await Promise.all([
+          sbSaveStaff(newStaff),
+          sbSaveEntries(newEntries),
+          sbSaveDailyStats(newDailyStats),
+          sbSaveNonWorkTypes(newNonWork),
+          sbSaveAlertSettings(newAlerts),
+          sbSavePTO(newPTO),
+          sbSaveNotes(newNotes),
+          sbSaveVisits(newVisits ?? visitData),
+        ]);
+        setSaveStatus("saved");
+      } catch(e) { console.error("Save error:", e); setSaveStatus("unsaved"); }
     }, 1200);
-  }, [alertSettings, ptoBalances, dayNotes]);
+  }, [canEdit, visitData]);
 
   // Keep refs current so undo can access latest values without dep-array churn
   nonWorkTypesRef.current = nonWorkTypes;
@@ -267,6 +655,7 @@ export default function StaffingApp() {
   const updateEntries = useCallback((val) => { pushHistory(staff, entries, dailyStats); setEntries(val); triggerSave(staff, val, dailyStats, nonWorkTypes, alertSettings, ptoBalances, dayNotes); }, [staff, entries, dailyStats, nonWorkTypes, alertSettings, ptoBalances, dayNotes, triggerSave, pushHistory]);
   const updateDailyStats = useCallback((val) => { pushHistory(staff, entries, dailyStats); setDailyStats(val); triggerSave(staff, entries, val, nonWorkTypes, alertSettings, ptoBalances, dayNotes); }, [staff, entries, dailyStats, nonWorkTypes, alertSettings, ptoBalances, dayNotes, triggerSave, pushHistory]);
   const updateNonWorkTypes = useCallback((val) => { setNonWorkTypes(val); triggerSave(staff, entries, dailyStats, val, alertSettings, ptoBalances, dayNotes); }, [staff, entries, dailyStats, alertSettings, ptoBalances, dayNotes, triggerSave]);
+  const updateLocations = useCallback((val) => { setLocations(val); saveToStorage("staffplan:locations", val); }, []);
   const updateAlertSettings = useCallback((val) => { setAlertSettings(val); triggerSave(staff, entries, dailyStats, nonWorkTypes, val, ptoBalances, dayNotes); }, [staff, entries, dailyStats, nonWorkTypes, ptoBalances, dayNotes, triggerSave]);
   const updatePtoBalances = useCallback((val) => { setPtoBalances(val); triggerSave(staff, entries, dailyStats, nonWorkTypes, alertSettings, val, dayNotes); }, [staff, entries, dailyStats, nonWorkTypes, alertSettings, dayNotes, triggerSave]);
   const updateDayNotes = useCallback((val) => { setDayNotes(val); triggerSave(staff, entries, dailyStats, nonWorkTypes, alertSettings, ptoBalances, val); }, [staff, entries, dailyStats, nonWorkTypes, alertSettings, ptoBalances, triggerSave]);
@@ -519,7 +908,12 @@ export default function StaffingApp() {
     nonWorkTypes.forEach(n => nwRows.push([n.code, n.label, n.color]));
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(nwRows), "NonWorkCodes");
 
-    // Sheet 6: Alert Settings
+    // Sheet 6: Locations
+    const locRows = [["id","team","name"]];
+    locations.forEach(l => locRows.push([l.id, l.team, l.name]));
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(locRows), "Locations");
+
+    // Sheet 7: Alert Settings
     const alertRows = [["type","team","key","value"]];
     Object.entries(alertSettings.fteTargets||{}).forEach(([team, val]) => {
       if (typeof val === "object") {
@@ -591,11 +985,13 @@ export default function StaffingApp() {
   const VIEW_TABS = [
     { id:"day",       icon:"☀️", label:"Day"        },
     { id:"grid",      icon:"📅", label:"Week"       },
+    { id:"master",    icon:"📋", label:"Master"     },
     { id:"month",     icon:"🗓", label:"Month"      },
     { id:"year",      icon:"📆", label:"Year"       },
     { id:"summary",   icon:"📊", label:"Dept Stats" },
     { id:"visits",    icon:"📈", label:"Visits"     },
     { id:"timesheet", icon:"🕐", label:"Timesheets" },
+    { id:"analytics", icon:"🔍", label:"Analytics", adminOnly: true },
   ];
 
   // Day nav helpers
@@ -620,17 +1016,32 @@ export default function StaffingApp() {
   }, [undo]);
 
   // Early returns AFTER all hooks
-  if (!loaded) return (
-    <div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",background:"#f0f4f8",fontFamily:"system-ui"}}>
-      <div style={{textAlign:"center"}}>
+  if (!authChecked) return (
+    <div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",background:"linear-gradient(135deg,#0f2744,#1e3a5f)"}}>
+      <div style={{textAlign:"center",color:"#fff"}}>
         <div style={{fontSize:32,marginBottom:12}}>⏳</div>
-        <div style={{fontSize:16,fontWeight:700,color:"#1e3a5f"}}>Loading your staffing data...</div>
+        <div style={{fontSize:16,fontWeight:700}}>StaffPlan</div>
+        <div style={{fontSize:12,opacity:0.6,marginTop:4}}>Checking session...</div>
       </div>
     </div>
   );
 
-  if (!unlocked) return (
-    <LockScreen onUnlock={() => setUnlocked(true)} />
+  if (!currentUser) return (
+    <LoginScreen onLogin={(user) => {
+      setCurrentUser(user);
+      trackEvent(user.id, user.email, "login", { role: user.profile?.role });
+      tabEnteredAt.current = Date.now();
+    }} />
+  );
+
+  if (!loaded) return (
+    <div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",background:"#f0f4f8"}}>
+      <div style={{textAlign:"center"}}>
+        <div style={{fontSize:32,marginBottom:12}}>⏳</div>
+        <div style={{fontSize:16,fontWeight:700,color:"#1e3a5f"}}>Loading staffing data...</div>
+        <div style={{fontSize:12,color:"#6b7280",marginTop:4}}>Signed in as {currentUser.email}</div>
+      </div>
+    </div>
   );
 
   return (
@@ -657,8 +1068,14 @@ export default function StaffingApp() {
 
         {/* View tabs — always visible */}
         <div style={{display:"flex",gap:3,background:"rgba(255,255,255,0.08)",borderRadius:10,padding:3,flexWrap:"wrap"}}>
-          {VIEW_TABS.map(tab => (
-            <button key={tab.id} onClick={() => setActiveTab(tab.id)} style={{
+          {VIEW_TABS.filter(tab => !tab.adminOnly || userRole === "admin").map(tab => (
+            <button key={tab.id} onClick={() => {
+              const duration = Math.round((Date.now() - tabEnteredAt.current) / 1000);
+              trackEvent(currentUser.id, currentUser.email, "tab_exit", { tab: activeTab, duration_seconds: duration });
+              tabEnteredAt.current = Date.now();
+              trackEvent(currentUser.id, currentUser.email, "tab_view", { tab: tab.id });
+              setActiveTab(tab.id);
+            }} style={{
               padding:"5px 12px",borderRadius:8,fontSize:12,fontWeight:600,cursor:"pointer",border:"none",
               background:activeTab===tab.id?"#fff":"transparent",
               color:activeTab===tab.id?"#1e3a5f":"#93c5fd",
@@ -673,14 +1090,25 @@ export default function StaffingApp() {
         {/* Right controls */}
         <div style={{display:"flex",gap:6,alignItems:"center"}}>
           <SaveBadge status={saveStatus} />
-          <button onClick={undo} disabled={!canUndo} title="Undo last change (Ctrl+Z)"
+          {canEdit && <button onClick={undo} disabled={!canUndo} title="Undo last change (Ctrl+Z)"
             style={{padding:"5px 11px",borderRadius:8,fontSize:13,fontWeight:700,cursor:canUndo?"pointer":"not-allowed",
               border:"1px solid rgba(255,255,255,0.2)",
               background:canUndo?"rgba(255,255,255,0.15)":"rgba(255,255,255,0.05)",
               color:canUndo?"#fff":"rgba(255,255,255,0.25)",
               transition:"all 0.15s"}} >
             ↩ Undo
-          </button>
+          </button>}
+
+          {/* User pill */}
+          <div style={{display:"flex",alignItems:"center",gap:6,padding:"4px 10px",borderRadius:8,background:"rgba(255,255,255,0.1)",border:"1px solid rgba(255,255,255,0.15)"}}>
+            <div style={{width:22,height:22,borderRadius:"50%",background:isAdmin?"#f59e0b":canEdit?"#22c55e":"#93c5fd",display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:800,color:"#fff",flexShrink:0}}>
+              {(currentUser?.profile?.display_name||currentUser?.email||"?")[0].toUpperCase()}
+            </div>
+            <div>
+              <div style={{fontSize:11,fontWeight:700,color:"#fff",lineHeight:1}}>{currentUser?.profile?.display_name||currentUser?.email}</div>
+              <div style={{fontSize:9,color:"#93c5fd",textTransform:"uppercase",letterSpacing:"0.05em"}}>{userRole}</div>
+            </div>
+          </div>
 
           {/* ⋯ Menu */}
           <div style={{position:"relative"}} ref={menuRef}>
@@ -696,19 +1124,21 @@ export default function StaffingApp() {
                 padding:"6px 0",overflow:"hidden"
               }}>
                 {[
-                  { icon:"👥", label:"Staff",              color:"#1e3a5f", action:()=>setShowStaffManager(true),   desc:"Add, edit, or archive staff members and manage their schedules" },
-                  { icon:"📝", label:"Enter Visit Data",   color:"#0ea5e9", action:()=>setShowVisitEntry(true),     desc:"Log weekly evals and patient visits by team" },
-                  { icon:"📋", label:"Batch Schedule Entry",color:"#7c3aed", action:()=>setShowBatchEntry(true),    desc:"Apply a schedule to multiple staff at once for a date range" },
-                  { icon:"⬆", label:"Bulk Upload",         color:"#22c55e", action:()=>setShowUpload(true),         desc:"Import staff schedules from a CSV file" },
-                  { icon:"📥", label:"Export Excel",        color:"#f59e0b", action:exportToExcel,                  desc:"Download the current week's schedule as an Excel spreadsheet" },
-                  { icon:"💾", label:"Backup All Data",     color:"#0ea5e9", action:exportBackup,                   desc:"Export everything — staff, schedules, visits, settings — to Excel" },
-                  { icon:"📂", label:"Restore from Backup", color:"#7c3aed", action:()=>setShowBackupRestore(true), desc:"Reload a previously exported backup file to restore all data" },
-                  { icon:"📤", label:"Publish Snapshot",    color:"#0ea5e9", action:generateSnapshot,               desc:"Generate a read-only HTML file of the current schedule to share" },
-                  { icon:"📦", label:`Archived Staff${staff.some(s=>s.archived)?` (${staff.filter(s=>s.archived).length})`:""}`, color:"#92400e", action:()=>setShowArchivedManager(true), desc:"View staff who have been archived — restore or permanently delete them" },
-                  { icon:"⚙", label:"Non-Work Codes",      color:"#8b5cf6", action:()=>setShowNonWorkEditor(true), desc:"Create and manage leave codes like VAC, SICK, PFL and their colors" },
-                  { icon:"🔐", label:"Change Password",     color:"#374151", action:()=>setShowPwManager(true),     desc:"Update the password required to unlock the app" },
-                  { icon:"🔒", label:"Lock Screen",         color:"#dc2626", action:()=>setUnlocked(false),         desc:"Lock the app immediately — password required to get back in" },
-                ].map(item => (
+                  canEdit && { icon:"👥", label:"Staff",              color:"#1e3a5f", action:()=>setShowStaffManager(true),   desc:"Add, edit, or archive staff members and manage their schedules" },
+                  canEdit && { icon:"📝", label:"Enter Visit Data",   color:"#0ea5e9", action:()=>setShowVisitEntry(true),     desc:"Log weekly evals and patient visits by team" },
+                  canEdit && { icon:"📋", label:"Batch Schedule Entry",color:"#7c3aed", action:()=>setShowBatchEntry(true),    desc:"Apply a schedule to multiple staff at once for a date range" },
+                  canEdit && { icon:"⬆", label:"Bulk Upload",         color:"#22c55e", action:()=>setShowUpload(true),         desc:"Import staff schedules from a CSV file" },
+                  { icon:"📥", label:"Export Excel",                  color:"#f59e0b", action:exportToExcel,                   desc:"Download the current week's schedule as an Excel spreadsheet" },
+                  isAdmin && { icon:"💾", label:"Backup All Data",    color:"#0ea5e9", action:exportBackup,                    desc:"Export everything — staff, schedules, visits, settings — to Excel" },
+                  isAdmin && { icon:"📂", label:"Restore from Backup",color:"#7c3aed", action:()=>setShowBackupRestore(true),  desc:"Reload a previously exported backup file to restore all data" },
+                  canEdit && { icon:"📦", label:`Archived Staff${staff.some(s=>s.archived)?` (${staff.filter(s=>s.archived).length})`:""}`, color:"#92400e", action:()=>setShowArchivedManager(true), desc:"View staff who have been archived — restore or permanently delete them" },
+                  isAdmin && { icon:"⚙", label:"Non-Work Codes",     color:"#8b5cf6", action:()=>setShowNonWorkEditor(true),  desc:"Create and manage leave codes like VAC, SICK, PFL and their colors" },
+                  isAdmin && { icon:"📍", label:"Locations",             color:"#0ea5e9", action:()=>setShowLocationEditor(true),  desc:"Define locations within each team that staff can be assigned to" },
+                  isAdmin && { icon:"🔔", label:"Alert Settings",     color:"#f59e0b", action:()=>setShowAlertsEditor(true),   desc:"Set FTE and census thresholds for warnings" },
+                  isAdmin && { icon:"👤", label:"Manage Users",       color:"#1e3a5f", action:()=>setShowUserManager(true),    desc:"Add users and control who can view or edit the schedule" },
+                  { icon:"🔐", label:"Change Password",               color:"#374151", action:()=>setShowPwManager(true),      desc:"Update your account password" },
+                  { icon:"🚪", label:"Sign Out",                      color:"#dc2626", action:async()=>{ await sbSignOut(); setCurrentUser(null); setLoaded(false); setStaff([]); setEntries({}); }, desc:"Sign out of StaffPlan" },
+                ].filter(Boolean).map(item => (
                   <button key={item.label} onClick={item.action} className="menu-item" title={item.desc} style={{
                     display:"flex",alignItems:"center",gap:10,width:"100%",padding:"9px 16px",
                     border:"none",background:"transparent",cursor:"pointer",textAlign:"left",fontSize:13,fontWeight:600,color:"#374151",
@@ -752,7 +1182,7 @@ export default function StaffingApp() {
           <button onClick={()=>setCompactMode(c=>!c)} title="Toggle compact mode" style={{...todayBtn,background:compactMode?"#1e3a5f":"#eff6ff",color:compactMode?"#fff":"#1d4ed8",border:"1px solid "+(compactMode?"#1e3a5f":"#bfdbfe")}}>
             {compactMode?"⊞ Expand":"⊟ Compact"}
           </button>
-          <button onClick={()=>setShowAlertsEditor(true)} style={{...todayBtn,background:"#fff7ed",color:"#c2410c",border:"1px solid #fed7aa"}}>🔔 Alerts</button>
+
           <div style={{marginLeft:"auto",display:"flex",gap:5,flexWrap:"wrap"}}>
             {["All",...TEAMS].map(t=>(
               <button key={t} onClick={()=>setFilterTeam(t)} style={{
@@ -807,7 +1237,8 @@ export default function StaffingApp() {
             editingName={editingName} setEditingName={setEditingName} tempName={tempName} setTempName={setTempName}
             updateStaff={updateStaff} staff={staff} compactMode={compactMode} getDayAlerts={getDayAlerts}
             dayNotes={dayNotes} updateDayNotes={updateDayNotes} alertSettings={alertSettings}
-            getDailyStats={getDailyStats} setDailyStat={setDailyStat} setHoliday={setHoliday} todayStr={todayStr} />
+            getDailyStats={getDailyStats} setDailyStat={setDailyStat} setHoliday={setHoliday} todayStr={todayStr}
+            canEdit={canEdit} />
         )}
         {activeTab==="month" && (
           <MonthView year={monthView.year} month={monthView.month} staff={staff} getEntry={getEntry}
@@ -819,6 +1250,9 @@ export default function StaffingApp() {
           <YearView year={yearView} staff={staff} getEntry={getEntry} getDayFTE={getDayFTE} nwMap={nwMap}
             setWeekStart={setWeekStart} setActiveTab={setActiveTab} setDrillDay={setDrillDay} />
         )}
+        {activeTab==="master" && (
+          <MasterScheduleView staff={staff} filterTeam={filterTeam} />
+        )}
         {activeTab==="summary" && (
           <SummaryTab weekDates={weekDates} getEntry={getEntry} getDailyStats={getDailyStats} getDayFTE={getDayFTE} weeklyMetrics={weeklyMetrics} nonWorkTypes={nonWorkTypes} staff={staff} dailyStats={dailyStats} yearView={yearView} ptoAlerts={ptoAlerts} entries={entries} />
         )}
@@ -828,11 +1262,14 @@ export default function StaffingApp() {
         {activeTab==="timesheet" && (
           <TimesheetTab staff={staff} entries={entries} weekStart={weekStart} nonWorkTypes={nonWorkTypes} />
         )}
+        {activeTab==="analytics" && userRole === "admin" && (
+          <AnalyticsDashboard currentUser={currentUser} />
+        )}
 
       </div>
 
       {editingCell && <CellEditor staffId={editingCell.staffId} dateStr={editingCell.dateStr} staff={staff}
-        getEntry={getEntry} setEntrySegments={setEntrySegments} nwMap={nwMap} nonWorkTypes={nonWorkTypes} onClose={()=>setEditingCell(null)} getDailyStats={getDailyStats} />}
+        getEntry={getEntry} setEntrySegments={setEntrySegments} nwMap={nwMap} nonWorkTypes={nonWorkTypes} onClose={()=>setEditingCell(null)} getDailyStats={getDailyStats} locations={locations} />}
       {drillDay && <DayDrillDown date={drillDay} staff={staff} getEntry={getEntry} getDailyStats={getDailyStats}
         setDailyStat={setDailyStat} setHoliday={setHoliday} getDayFTE={getDayFTE} nwMap={nwMap} onClose={()=>setDrillDay(null)} />}
       {showStaffManager && (
@@ -897,13 +1334,15 @@ export default function StaffingApp() {
         updateStaff={updateStaff} updateEntries={updateEntries}
         updateDailyStats={updateDailyStats} updatePtoBalances={updatePtoBalances}
         updateNonWorkTypes={updateNonWorkTypes} updateAlertSettings={updateAlertSettings}
-        updateDayNotes={updateDayNotes} updateVisitData={updateVisitData} />}
+        updateDayNotes={updateDayNotes} updateVisitData={updateVisitData}  updateLocations={updateLocations} />}
       {showUpload && <BulkUploadModal staff={staff} updateStaff={updateStaff} entries={entries} updateEntries={updateEntries}
         nonWorkTypes={nonWorkTypes} onClose={()=>setShowUpload(false)} />}
       {showNonWorkEditor && <NonWorkEditor nonWorkTypes={nonWorkTypes} updateNonWorkTypes={updateNonWorkTypes} onClose={()=>setShowNonWorkEditor(false)} />}
-      {showPwManager && <PasswordManager onClose={()=>setShowPwManager(false)} />}
+      {showPwManager && <PasswordManager currentUser={currentUser} onClose={()=>setShowPwManager(false)} />}
       {showAlertsEditor && <AlertsEditor alertSettings={alertSettings} updateAlertSettings={updateAlertSettings} onClose={()=>setShowAlertsEditor(false)} />}
       {showBatchEntry && <BatchEntryModal staff={staff} entries={entries} updateEntries={updateEntries} nonWorkTypes={nonWorkTypes} onClose={()=>setShowBatchEntry(false)} />}
+      {showUserManager && <UserManagerModal currentUser={currentUser} onClose={()=>setShowUserManager(false)} />}
+      {showLocationEditor && <LocationEditor locations={locations} updateLocations={updateLocations} onClose={()=>setShowLocationEditor(false)} />}
       {menuOpen && <div style={{position:"fixed",inset:0,zIndex:499}} onClick={()=>setMenuOpen(false)} />}
     </div>
   );
@@ -947,11 +1386,12 @@ function DayView({ date, staff, getEntry, setEntrySegments, getDailyStats, setDa
     const hasNonWork = segs.some(e => e.nonWork);
     if (totalHrs === 0 && !hasNonWork) return null;
     const start = s.shiftStart || "08:00";
-    const end = s.shiftEnd || "16:00";
     const [sh, sm] = start.split(":").map(Number);
-    const [eh, em] = end.split(":").map(Number);
+    const startHour = sh + sm / 60;
+    // End hour derived from actual scheduled hours, not the default shift end time
+    const endHour = totalHrs > 0 ? startHour + totalHrs : startHour;
     const nonWorkOnly = totalHrs === 0 && hasNonWork;
-    return { startHour: sh + sm / 60, endHour: eh + em / 60, totalHrs: isNaN(totalHrs) ? 0 : totalHrs, segs, nonWorkOnly };
+    return { startHour, endHour, totalHrs: isNaN(totalHrs) ? 0 : totalHrs, segs, nonWorkOnly };
   };
 
   // Only staff with actual worked hours appear on the timeline
@@ -1105,16 +1545,26 @@ function DayView({ date, staff, getEntry, setEntrySegments, getDailyStats, setDa
                   );
                 })()}
               {staffOnDuty.map(({ s, info }) => {
-                const tc = TEAM_COLORS[s.team];
+                const homeTc = TEAM_COLORS[s.team];
+                // Use the team they're actually working that day, not their home team
+                const workSegs = info.segs.filter(e => Number(e.hours) > 0);
+                const primaryWorkTeam = workSegs.length > 0 ? (workSegs[0].team || s.team) : s.team;
+                const tc = TEAM_COLORS[primaryWorkTeam] || homeTc;
                 const totalCols = HOUR_END - HOUR_START;
                 const startPct = Math.max(0, (info.startHour - HOUR_START) / totalCols) * 100;
                 const widthPct = Math.min(100 - startPct, (info.endHour - Math.max(info.startHour, HOUR_START)) / totalCols * 100);
                 const nwSegs = info.segs.filter(e => e.nonWork);
                 return (
                   <div key={s.id} style={{ display: "grid", gridTemplateColumns: "140px 1fr", gap: 0, marginBottom: 4, alignItems: "center" }}>
-                    <div style={{ fontSize: 11, fontWeight: 600, color: "#374151", paddingRight: 8, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                      <span style={{ display: "inline-block", width: 7, height: 7, borderRadius: "50%", background: tc?.dot, marginRight: 5 }} />
-                      {s.name}
+                    <div style={{ paddingRight: 8, overflow: "hidden", minWidth: 0 }}>
+                      <div style={{ fontSize: 11, fontWeight: 600, color: "#374151", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                        {/* Dot shows actual working team color; home team dot shown smaller if different */}
+                        <span style={{ display: "inline-block", width: 7, height: 7, borderRadius: "50%", background: tc?.dot, marginRight: primaryWorkTeam !== s.team ? 2 : 5, flexShrink: 0 }} />
+                        {primaryWorkTeam !== s.team && (
+                          <span title={`Home team: ${s.team}`} style={{ display: "inline-block", width: 5, height: 5, borderRadius: "50%", background: homeTc?.dot, marginRight: 4, opacity: 0.5, flexShrink: 0 }} />
+                        )}
+                        {s.name}
+                      </div>
                     </div>
                     <div style={{ position: "relative", height: 24, background: "#f8fafc", borderRadius: 6 }}>
                       {/* Hour grid lines */}
@@ -1126,13 +1576,26 @@ function DayView({ date, staff, getEntry, setEntrySegments, getDailyStats, setDa
                         position: "absolute", left: `${startPct}%`, width: `${widthPct}%`,
                         top: 3, bottom: 3, borderRadius: 4,
                         background: nwSegs.length > 0 ? nwSegs[0] && nwMap[nwSegs[0].nonWork]?.color + "88" || tc?.dot + "88" : tc?.dot + "cc",
-                        display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden"
+                        display: "flex", alignItems: "center", overflow: "hidden", gap: 0
                       }}>
-                        <span style={{ fontSize: 9, fontWeight: 700, color: "#fff", whiteSpace: "nowrap", padding: "0 4px" }}>
+                        <span style={{ fontSize: 9, fontWeight: 700, color: "#fff", whiteSpace: "nowrap", padding: "0 5px", flexShrink: 0 }}>
                           {info.totalHrs}h
                           {info.segs.length > 1 && " split"}
                           {nwSegs.length > 0 && " · " + nwSegs[0].nonWork}
                         </span>
+                        {info.segs.filter(e=>e.location).map((e,li) => {
+                          const tc2 = TEAM_COLORS[e.team||s.team];
+                          return (
+                            <span key={li} style={{
+                              fontSize:8, fontWeight:800, color:"#fff", whiteSpace:"nowrap",
+                              padding:"0 5px", borderRadius:0, flexShrink:0,
+                              background:"rgba(0,0,0,0.18)",
+                              borderLeft:"1px solid rgba(255,255,255,0.3)",
+                              letterSpacing:"0.03em", alignSelf:"stretch",
+                              display:"flex", alignItems:"center"
+                            }}>📍 {e.location}</span>
+                          );
+                        })}
                       </div>
                       {/* Team split segments */}
                       {info.segs.length > 1 && (() => {
@@ -1174,16 +1637,20 @@ function DayView({ date, staff, getEntry, setEntrySegments, getDailyStats, setDa
             </div>
             <div style={{ maxHeight: 220, overflowY: "auto" }}>
               {staffOnDuty.map(({ s, info }) => {
-                const tc = TEAM_COLORS[s.team];
+                const homeTc = TEAM_COLORS[s.team];
+                const workSegs = info.segs.filter(e => Number(e.hours) > 0);
+                const primaryWorkTeam = workSegs.length > 0 ? (workSegs[0].team || s.team) : s.team;
+                const tc = TEAM_COLORS[primaryWorkTeam] || homeTc;
                 return (
                   <div key={s.id} style={{ padding: "7px 14px", borderBottom: "1px solid #f9fafb", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                       <div style={{ width: 6, height: 6, borderRadius: "50%", background: tc?.dot }} />
                       <span style={{ fontSize: 12, fontWeight: 600, color: "#111827" }}>{s.name}</span>
                     </div>
-                    <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+                    <div style={{ display: "flex", gap: 4, alignItems: "center", flexWrap:"wrap", justifyContent:"flex-end" }}>
                       <span style={{ fontSize: 11, fontWeight: 700, color: "#1e3a5f" }}>{info.totalHrs}h</span>
-                      <span style={{ fontSize: 10, padding: "1px 6px", borderRadius: 99, background: tc?.bg, color: tc?.text, fontWeight: 600 }}>{s.team}</span>
+                      <span style={{ fontSize: 10, padding: "1px 6px", borderRadius: 99, background: tc?.bg, color: tc?.text, fontWeight: 600 }}>{primaryWorkTeam}{primaryWorkTeam !== s.team && <span style={{opacity:0.6}}> ↩{s.team}</span>}</span>
+
                     </div>
                   </div>
                 );
@@ -1414,186 +1881,291 @@ function MonthView({ year, month, staff, getEntry, getDayFTE, nwMap, setDrillDay
 }
 
 // ─── Simple hash (not cryptographic — just obfuscation for shared link) ────────
-async function hashPin(pin) {
-  // Use SubtleCrypto if available, fallback to simple checksum
-  if (window.crypto && window.crypto.subtle) {
-    const buf = new TextEncoder().encode("staffplan:" + pin);
-    const hash = await window.crypto.subtle.digest("SHA-256", buf);
-    return Array.from(new Uint8Array(hash)).map(b => b.toString(16).padStart(2,"0")).join("");
-  }
-  // Simple fallback
-  let h = 0;
-  for (const c of "staffplan:" + pin) h = (Math.imul(31, h) + c.charCodeAt(0)) | 0;
-  return String(h);
-}
-
-// ─── Lock Screen ─────────────────────────────────────────────────────────────
-function LockScreen({ onUnlock }) {
-  const [pin, setPin] = useState("");
-  const [error, setError] = useState("");
-  const [checking, setChecking] = useState(false);
-  const inputRef = useRef(null);
-
-  useEffect(() => { inputRef.current?.focus(); }, []);
-
-  const tryUnlock = async () => {
-    if (!pin) return;
-    setChecking(true);
-    const stored = await loadFromStorage("staffplan:pwHash", null);
-    if (!stored) { onUnlock(); return; }
-    const hashed = await hashPin(pin);
-    if (hashed === stored) {
-      setError(""); onUnlock();
-    } else {
-      setError("Incorrect password. Please try again.");
-      setPin("");
-      setTimeout(() => setError(""), 3000);
-    }
-    setChecking(false);
-  };
-
-  return (
-    <div style={{display:"flex",alignItems:"center",justifyContent:"center",minHeight:"100vh",background:"linear-gradient(135deg,#1e3a5f 0%,#1e40af 100%)",fontFamily:"'DM Sans',system-ui,sans-serif"}}>
-      <div style={{background:"#fff",borderRadius:20,padding:"40px 36px",width:360,boxShadow:"0 25px 60px rgba(0,0,0,0.3)",textAlign:"center"}}>
-        <div style={{fontSize:48,marginBottom:8}}>🔒</div>
-        <div style={{fontSize:22,fontWeight:800,color:"#1e3a5f",marginBottom:4}}>StaffPlan</div>
-        <div style={{fontSize:13,color:"#6b7280",marginBottom:28}}>Enter your password to continue</div>
-
-        <input
-          ref={inputRef}
-          type="password"
-          value={pin}
-          onChange={e => { setPin(e.target.value); setError(""); }}
-          onKeyDown={e => e.key === "Enter" && tryUnlock()}
-          placeholder="Password"
-          style={{width:"100%",padding:"12px 16px",border:"2px solid "+(error?"#fca5a5":"#e5e7eb"),borderRadius:10,fontSize:16,textAlign:"center",boxSizing:"border-box",marginBottom:12,outline:"none",letterSpacing:"0.1em"}}
-        />
-
-        {error && (
-          <div style={{fontSize:12,color:"#dc2626",marginBottom:12,padding:"6px 12px",background:"#fef2f2",borderRadius:7}}>{error}</div>
-        )}
-
-        <button onClick={tryUnlock} disabled={checking || !pin} style={{
-          width:"100%",padding:"12px",borderRadius:10,background:pin?"#1e3a5f":"#e5e7eb",
-          color:pin?"#fff":"#9ca3af",border:"none",fontSize:15,fontWeight:700,cursor:pin?"pointer":"not-allowed",
-          transition:"all 0.15s"
-        }}>
-          {checking ? "Checking..." : "Unlock →"}
-        </button>
-
-        <div style={{marginTop:20,fontSize:11,color:"#9ca3af"}}>Department Staffing &amp; Planning</div>
-      </div>
-    </div>
-  );
-}
-
-// ─── Password Manager ─────────────────────────────────────────────────────────
-function PasswordManager({ onClose }) {
-  const [mode, setMode] = useState("set"); // set | change | remove
-  const [current, setCurrent] = useState("");
+// ─── Password Manager (Supabase) ─────────────────────────────────────────────
+function PasswordManager({ currentUser, onClose }) {
   const [newPw, setNewPw] = useState("");
   const [confirm, setConfirm] = useState("");
-  const [msg, setMsg] = useState(null); // {text, type: ok|err}
-  const [hasPassword, setHasPassword] = useState(null);
+  const [msg, setMsg] = useState(null);
+  const [loading, setLoading] = useState(false);
 
-  useEffect(() => {
-    loadFromStorage("staffplan:pwHash", null).then(h => {
-      setHasPassword(!!h);
-      setMode(h ? "change" : "set");
-    });
-  }, []);
-
-  const showMsg = (text, type) => { setMsg({text, type}); setTimeout(() => setMsg(null), 3500); };
+  const showMsg = (text, type) => { setMsg({text, type}); setTimeout(()=>setMsg(null), 3500); };
 
   const save = async () => {
     if (newPw !== confirm) { showMsg("Passwords don't match.", "err"); return; }
-    if (newPw.length < 4) { showMsg("Password must be at least 4 characters.", "err"); return; }
-    if (hasPassword) {
-      const curHash = await hashPin(current);
-      const storedHash = await loadFromStorage("staffplan:pwHash", null);
-      if (curHash !== storedHash) { showMsg("Current password is incorrect.", "err"); return; }
-    }
-    const hash = await hashPin(newPw);
-    await saveToStorage("staffplan:pwHash", hash);
-    showMsg("Password saved! ✓", "ok");
-    setTimeout(onClose, 1200);
-  };
-
-  const remove = async () => {
-    if (hasPassword) {
-      const curHash = await hashPin(current);
-      const storedHash = await loadFromStorage("staffplan:pwHash", null);
-      if (curHash !== storedHash) { showMsg("Current password is incorrect.", "err"); return; }
-    }
-    await saveToStorage("staffplan:pwHash", "");
-    showMsg("Password removed. App is now open access.", "ok");
-    setTimeout(onClose, 1500);
+    if (newPw.length < 8) { showMsg("Password must be at least 8 characters.", "err"); return; }
+    setLoading(true);
+    try {
+      await sbUpdatePassword(newPw);
+      showMsg("Password updated! ✓", "ok");
+      setTimeout(onClose, 1500);
+    } catch(e) { showMsg(e.message || "Failed to update password.", "err"); }
+    setLoading(false);
   };
 
   return (
     <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.5)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:3000}} onClick={onClose}>
       <div style={{background:"#fff",borderRadius:18,padding:30,width:400,boxShadow:"0 25px 60px rgba(0,0,0,0.22)"}} onClick={e=>e.stopPropagation()}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}>
-          <div style={{fontSize:18,fontWeight:800,color:"#1e3a5f"}}>🔐 Password Settings</div>
+          <div style={{fontSize:18,fontWeight:800,color:"#1e3a5f"}}>🔐 Change Password</div>
+          <button onClick={onClose} style={{background:"#f3f4f6",border:"none",borderRadius:8,padding:"5px 12px",cursor:"pointer",fontWeight:700}}>✕</button>
+        </div>
+        <div style={{fontSize:12,color:"#6b7280",marginBottom:16}}>Changing password for: <strong>{currentUser?.email}</strong></div>
+        <div style={{display:"grid",gap:12}}>
+          <div>
+            <label style={lbl}>New Password</label>
+            <input type="password" value={newPw} onChange={e=>setNewPw(e.target.value)} style={inp} placeholder="At least 8 characters" />
+          </div>
+          <div>
+            <label style={lbl}>Confirm New Password</label>
+            <input type="password" value={confirm} onChange={e=>setConfirm(e.target.value)}
+              onKeyDown={e=>e.key==="Enter"&&save()} style={inp} placeholder="Repeat password" />
+          </div>
+        </div>
+        {msg && <div style={{marginTop:12,padding:"8px 14px",borderRadius:8,fontSize:13,fontWeight:600,background:msg.type==="ok"?"#f0fdf4":"#fef2f2",color:msg.type==="ok"?"#15803d":"#dc2626"}}>{msg.text}</div>}
+        <div style={{display:"flex",gap:8,marginTop:18}}>
+          <button onClick={onClose} style={{flex:1,padding:"10px",borderRadius:10,background:"#f3f4f6",border:"none",cursor:"pointer",fontSize:13,fontWeight:600}}>Cancel</button>
+          <button onClick={save} disabled={loading} style={{flex:2,padding:"10px",borderRadius:10,background:"#1e3a5f",color:"#fff",border:"none",cursor:"pointer",fontSize:14,fontWeight:700}}>
+            {loading?"Saving...":"Update Password"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+// ─── Location Editor ──────────────────────────────────────────────────────────
+function LocationEditor({ locations, updateLocations, onClose }) {
+  const [locs, setLocs] = useState(locations.map(l=>({...l})));
+  const [newName, setNewName] = useState("");
+  const [newTeam, setNewTeam] = useState(TEAMS[0]);
+
+  const add = () => {
+    if (!newName.trim()) return;
+    const id = Date.now();
+    setLocs(prev => [...prev, { id, team: newTeam, name: newName.trim() }]);
+    setNewName("");
+  };
+
+  const remove = (id) => setLocs(prev => prev.filter(l => l.id !== id));
+
+  const save = () => { updateLocations(locs); onClose(); };
+
+  return (
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.5)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:3000}} onClick={onClose}>
+      <div style={{background:"#fff",borderRadius:18,padding:28,width:480,maxHeight:"85vh",overflow:"auto",boxShadow:"0 25px 60px rgba(0,0,0,0.25)"}} onClick={e=>e.stopPropagation()}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
+          <div>
+            <div style={{fontSize:17,fontWeight:800,color:"#1e3a5f"}}>📍 Manage Locations</div>
+            <div style={{fontSize:11,color:"#6b7280",marginTop:2}}>Define locations within each team that staff can be assigned to</div>
+          </div>
           <button onClick={onClose} style={{background:"#f3f4f6",border:"none",borderRadius:8,padding:"5px 12px",cursor:"pointer",fontWeight:700}}>✕</button>
         </div>
 
-        {hasPassword === null ? <div style={{textAlign:"center",padding:20,color:"#9ca3af"}}>Loading...</div> : (<>
-          <div style={{display:"flex",gap:6,marginBottom:18}}>
-            {(hasPassword ? ["change","remove"] : ["set"]).map(m => (
-              <button key={m} onClick={()=>setMode(m)} style={{
-                flex:1,padding:"8px",borderRadius:8,border:"1px solid "+(mode===m?"#1e3a5f":"#e5e7eb"),
-                background:mode===m?"#eff6ff":"#fff",color:mode===m?"#1e3a5f":"#6b7280",
-                fontWeight:700,fontSize:12,cursor:"pointer",textTransform:"capitalize"
-              }}>{m === "set" ? "Set Password" : m === "change" ? "Change Password" : "Remove Password"}</button>
-            ))}
-          </div>
+        {/* Existing locations by team */}
+        <div style={{marginBottom:18}}>
+          {TEAMS.map(team => {
+            const teamLocs = locs.filter(l => l.team === team);
+            const tc = TEAM_COLORS[team];
+            return (
+              <div key={team} style={{marginBottom:12}}>
+                <div style={{fontSize:11,fontWeight:700,color:tc?.text||"#374151",marginBottom:6,padding:"3px 8px",background:tc?.bg||"#f9fafb",borderRadius:6,display:"inline-block"}}>{team}</div>
+                {teamLocs.length === 0 && <div style={{fontSize:11,color:"#9ca3af",marginLeft:4}}>No locations defined</div>}
+                <div style={{display:"flex",flexWrap:"wrap",gap:6,marginTop:4}}>
+                  {teamLocs.map(l => (
+                    <div key={l.id} style={{display:"flex",alignItems:"center",gap:4,padding:"4px 10px",borderRadius:99,background:tc?.bg||"#f9fafb",border:"1px solid "+(tc?.dot||"#e5e7eb")}}>
+                      <span style={{fontSize:12,fontWeight:600,color:tc?.text||"#374151"}}>{l.name}</span>
+                      <button onClick={()=>remove(l.id)} style={{background:"none",border:"none",cursor:"pointer",color:"#9ca3af",fontSize:12,fontWeight:700,padding:0,lineHeight:1}}>✕</button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            );
+          })}
+        </div>
 
-          <div style={{display:"grid",gap:12}}>
-            {hasPassword && mode !== "remove" && (
-              <div>
-                <label style={lbl}>Current Password</label>
-                <input type="password" value={current} onChange={e=>setCurrent(e.target.value)} style={inp} placeholder="Enter current password" />
-              </div>
-            )}
-            {hasPassword && mode === "remove" && (
-              <div>
-                <label style={lbl}>Current Password (to confirm removal)</label>
-                <input type="password" value={current} onChange={e=>setCurrent(e.target.value)} style={inp} placeholder="Enter current password" />
-              </div>
-            )}
-            {mode !== "remove" && (<>
-              <div>
-                <label style={lbl}>New Password</label>
-                <input type="password" value={newPw} onChange={e=>setNewPw(e.target.value)} style={inp} placeholder="At least 4 characters" />
-              </div>
-              <div>
-                <label style={lbl}>Confirm New Password</label>
-                <input type="password" value={confirm} onChange={e=>setConfirm(e.target.value)}
-                  onKeyDown={e=>e.key==="Enter"&&save()} style={inp} placeholder="Repeat password" />
-              </div>
-            </>)}
-          </div>
-
-          {msg && (
-            <div style={{marginTop:12,padding:"8px 14px",borderRadius:8,fontSize:13,fontWeight:600,
-              background:msg.type==="ok"?"#f0fdf4":"#fef2f2",color:msg.type==="ok"?"#15803d":"#dc2626"}}>
-              {msg.text}
+        {/* Add new location */}
+        <div style={{padding:"14px 16px",background:"#f8fafc",borderRadius:10,border:"1px solid #e5e7eb",marginBottom:16}}>
+          <div style={{fontSize:12,fontWeight:700,color:"#374151",marginBottom:10}}>➕ Add Location</div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr auto",gap:8,alignItems:"end"}}>
+            <div>
+              <label style={{fontSize:10,fontWeight:600,color:"#6b7280",display:"block",marginBottom:3}}>Team</label>
+              <select value={newTeam} onChange={e=>setNewTeam(e.target.value)} style={{...sel,fontSize:12,padding:"7px 8px",width:"100%"}}>
+                {TEAMS.map(t=><option key={t}>{t}</option>)}
+              </select>
             </div>
-          )}
-
-          <div style={{display:"flex",gap:8,marginTop:18}}>
-            <button onClick={onClose} style={{flex:1,padding:"10px",borderRadius:10,background:"#f3f4f6",border:"none",cursor:"pointer",fontSize:13,fontWeight:600}}>Cancel</button>
-            <button onClick={mode==="remove"?remove:save} style={{flex:2,padding:"10px",borderRadius:10,
-              background:mode==="remove"?"#dc2626":"#1e3a5f",color:"#fff",border:"none",cursor:"pointer",fontSize:14,fontWeight:700}}>
-              {mode==="remove"?"Remove Password":"Save Password"}
+            <div>
+              <label style={{fontSize:10,fontWeight:600,color:"#6b7280",display:"block",marginBottom:3}}>Location Name</label>
+              <input value={newName} onChange={e=>setNewName(e.target.value)}
+                onKeyDown={e=>e.key==="Enter"&&add()}
+                placeholder="e.g. 4 East, NICU, Gym..."
+                style={{...inp,fontSize:12,padding:"7px 8px",width:"100%"}} />
+            </div>
+            <button onClick={add} style={{padding:"7px 14px",borderRadius:8,background:"#1e3a5f",color:"#fff",border:"none",fontWeight:700,fontSize:13,cursor:"pointer",whiteSpace:"nowrap"}}>
+              Add
             </button>
           </div>
+        </div>
 
-          <div style={{marginTop:14,fontSize:11,color:"#9ca3af",lineHeight:1.5}}>
-            Note: This password protects the app when shared as a link. It uses SHA-256 hashing stored in your session. It is not suitable for protecting highly sensitive clinical data.
+        <div style={{display:"flex",gap:8}}>
+          <button onClick={onClose} style={{flex:1,padding:"10px",borderRadius:10,background:"#f3f4f6",border:"none",cursor:"pointer",fontSize:13,fontWeight:600}}>Cancel</button>
+          <button onClick={save} style={{flex:2,padding:"10px",borderRadius:10,background:"#1e3a5f",color:"#fff",border:"none",cursor:"pointer",fontSize:14,fontWeight:700}}>Save Locations</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── User Manager Modal (admin only) ─────────────────────────────────────────
+function UserManagerModal({ currentUser, onClose }) {
+  const [users, setUsers] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [newEmail, setNewEmail] = useState("");
+  const [newPw, setNewPw] = useState("");
+  const [newName, setNewName] = useState("");
+  const [newRole, setNewRole] = useState("viewer");
+  const [msg, setMsg] = useState(null);
+  const [creating, setCreating] = useState(false);
+
+  const showMsg = (text, type="ok") => { setMsg({text,type}); setTimeout(()=>setMsg(null),4000); };
+
+  const loadUsers = async () => {
+    const sb = await getSB();
+    const { data } = await sb.from("user_profiles").select("*").order("created_at");
+    setUsers(data || []);
+    setLoading(false);
+  };
+
+  useEffect(() => { loadUsers(); }, []);
+
+  const createUser = async () => {
+    if (!newEmail || !newPw || newPw.length < 8) {
+      showMsg("Email and password (min 8 chars) required.", "err"); return;
+    }
+    setCreating(true);
+    try {
+      const sb = await getSB();
+      // Create user via standard signUp (works with anon key, email confirm disabled)
+      const { data, error } = await sb.auth.signUp({
+        email: newEmail, password: newPw,
+        options: { data: { display_name: newName || newEmail.split("@")[0] } }
+      });
+      if (error) throw error;
+      if (!data.user) throw new Error("User creation failed — check Supabase Auth settings.");
+      // Update their profile role (trigger auto-created it as viewer)
+      await sb.from("user_profiles").upsert({
+        id: data.user.id, email: newEmail,
+        display_name: newName || newEmail.split("@")[0],
+        role: newRole
+      }, { onConflict: "id" });
+      showMsg(`✓ User ${newEmail} created as ${newRole}. They can sign in now.`);
+      setNewEmail(""); setNewPw(""); setNewName(""); setNewRole("viewer");
+      setTimeout(loadUsers, 1000);
+    } catch(e) { showMsg(e.message || "Failed to create user.", "err"); }
+    setCreating(false);
+  };
+
+  const updateRole = async (userId, role) => {
+    const sb = await getSB();
+    await sb.from("user_profiles").update({ role }).eq("id", userId);
+    setUsers(prev => prev.map(u => u.id===userId ? {...u, role} : u));
+  };
+
+  const deleteUser = async (userId, email) => {
+    if (!confirm(`Remove ${email}? They will lose access immediately.`)) return;
+    const sb = await getSB();
+    await sb.auth.admin.deleteUser(userId);
+    setUsers(prev => prev.filter(u => u.id !== userId));
+    showMsg(`${email} removed.`);
+  };
+
+  const roleBadge = (role) => {
+    const c = role==="admin"?"#f59e0b":role==="manager"?"#22c55e":"#93c5fd";
+    return <span style={{padding:"2px 8px",borderRadius:99,background:c+"22",color:c,fontSize:10,fontWeight:800,textTransform:"uppercase"}}>{role}</span>;
+  };
+
+  return (
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.5)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:3000}} onClick={onClose}>
+      <div style={{background:"#fff",borderRadius:18,padding:28,width:580,maxHeight:"85vh",overflow:"auto",boxShadow:"0 25px 60px rgba(0,0,0,0.25)"}} onClick={e=>e.stopPropagation()}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}>
+          <div>
+            <div style={{fontSize:18,fontWeight:800,color:"#1e3a5f"}}>👤 Manage Users</div>
+            <div style={{fontSize:11,color:"#6b7280",marginTop:2}}>Control who can access and edit StaffPlan</div>
           </div>
-        </>)}
+          <button onClick={onClose} style={{background:"#f3f4f6",border:"none",borderRadius:8,padding:"5px 12px",cursor:"pointer",fontWeight:700}}>✕</button>
+        </div>
+
+        {/* Role legend */}
+        <div style={{display:"flex",gap:10,marginBottom:16,padding:"10px 14px",background:"#f8fafc",borderRadius:9,border:"1px solid #e5e7eb"}}>
+          <div style={{fontSize:11,color:"#6b7280"}}><strong style={{color:"#f59e0b"}}>Admin</strong> — full access, manage users & settings</div>
+          <div style={{fontSize:11,color:"#6b7280"}}><strong style={{color:"#22c55e"}}>Manager</strong> — edit schedules & visits</div>
+          <div style={{fontSize:11,color:"#6b7280"}}><strong style={{color:"#3b82f6"}}>Viewer</strong> — read only</div>
+        </div>
+
+        {/* Existing users */}
+        {loading ? <div style={{textAlign:"center",padding:20,color:"#9ca3af"}}>Loading...</div> : (
+          <div style={{marginBottom:20}}>
+            <div style={{fontSize:12,fontWeight:700,color:"#374151",marginBottom:8}}>Current Users ({users.length})</div>
+            <div style={{border:"1px solid #e5e7eb",borderRadius:10,overflow:"hidden"}}>
+              {users.map((u,i) => (
+                <div key={u.id} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 14px",borderBottom:i<users.length-1?"1px solid #f3f4f6":"none",background:u.id===currentUser?.id?"#f0f7ff":"#fff"}}>
+                  <div style={{width:32,height:32,borderRadius:"50%",background:u.role==="admin"?"#fef3c7":u.role==="manager"?"#dcfce7":"#dbeafe",display:"flex",alignItems:"center",justifyContent:"center",fontWeight:800,fontSize:13,flexShrink:0}}>
+                    {(u.display_name||u.email||"?")[0].toUpperCase()}
+                  </div>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{fontSize:13,fontWeight:700,color:"#111827"}}>{u.display_name||"—"}</div>
+                    <div style={{fontSize:11,color:"#6b7280"}}>{u.email}</div>
+                  </div>
+                  {roleBadge(u.role)}
+                  {u.id !== currentUser?.id && <>
+                    <select value={u.role} onChange={e=>updateRole(u.id,e.target.value)}
+                      style={{padding:"4px 8px",borderRadius:7,border:"1px solid #e5e7eb",fontSize:11,fontWeight:600,background:"#fff",cursor:"pointer"}}>
+                      <option value="viewer">Viewer</option>
+                      <option value="manager">Manager</option>
+                      <option value="admin">Admin</option>
+                    </select>
+                    <button onClick={()=>deleteUser(u.id,u.email)} title="Remove user"
+                      style={{padding:"4px 8px",borderRadius:7,background:"#fef2f2",border:"none",color:"#dc2626",cursor:"pointer",fontSize:12,fontWeight:700,flexShrink:0}}>✕</button>
+                  </>}
+                  {u.id === currentUser?.id && <span style={{fontSize:10,color:"#9ca3af"}}>(you)</span>}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Create new user */}
+        <div style={{padding:"14px 16px",background:"#f8fafc",borderRadius:10,border:"1px solid #e5e7eb"}}>
+          <div style={{fontSize:12,fontWeight:700,color:"#374151",marginBottom:10}}>➕ Add New User</div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:8}}>
+            <div>
+              <label style={{fontSize:10,fontWeight:600,color:"#6b7280",display:"block",marginBottom:3}}>Email *</label>
+              <input type="email" value={newEmail} onChange={e=>setNewEmail(e.target.value)} style={{...inp,fontSize:12}} placeholder="user@hospital.org" />
+            </div>
+            <div>
+              <label style={{fontSize:10,fontWeight:600,color:"#6b7280",display:"block",marginBottom:3}}>Display Name</label>
+              <input value={newName} onChange={e=>setNewName(e.target.value)} style={{...inp,fontSize:12}} placeholder="First Last" />
+            </div>
+            <div>
+              <label style={{fontSize:10,fontWeight:600,color:"#6b7280",display:"block",marginBottom:3}}>Temporary Password * (min 8 chars)</label>
+              <input type="password" value={newPw} onChange={e=>setNewPw(e.target.value)} style={{...inp,fontSize:12}} placeholder="They can change it later" />
+            </div>
+            <div>
+              <label style={{fontSize:10,fontWeight:600,color:"#6b7280",display:"block",marginBottom:3}}>Role</label>
+              <select value={newRole} onChange={e=>setNewRole(e.target.value)} style={{...inp,fontSize:12,cursor:"pointer"}}>
+                <option value="viewer">Viewer (read only)</option>
+                <option value="manager">Manager (can edit)</option>
+                <option value="admin">Admin (full access)</option>
+              </select>
+            </div>
+          </div>
+          {msg && <div style={{padding:"6px 10px",borderRadius:7,fontSize:12,fontWeight:600,background:msg.type==="ok"?"#f0fdf4":"#fef2f2",color:msg.type==="ok"?"#15803d":"#dc2626",marginBottom:8}}>{msg.text}</div>}
+          <button onClick={createUser} disabled={creating}
+            style={{width:"100%",padding:"9px",borderRadius:9,background:creating?"#93c5fd":"#1e3a5f",color:"#fff",border:"none",fontWeight:700,fontSize:13,cursor:creating?"not-allowed":"pointer"}}>
+            {creating?"Creating...":"Create User →"}
+          </button>
+          <div style={{fontSize:10,color:"#9ca3af",marginTop:6}}>Users can sign in immediately with the email and temporary password you set. Advise them to change it via Menu → Change Password.</div>
+        </div>
       </div>
     </div>
   );
@@ -1746,14 +2318,74 @@ function HolidayToggleBtn({ ds, isHoliday, setHoliday, setDailyStat, small }) {
 }
 
 // ─── Week Grid ────────────────────────────────────────────────────────────────
-function WeekGrid({ filteredStaff, weekDates, getEntry, getDayFTE, nwMap, setEditingCell, setDrillDay, editingName, setEditingName, tempName, setTempName, updateStaff, staff, compactMode, getDayAlerts, dayNotes, updateDayNotes, alertSettings, getDailyStats, setDailyStat, setHoliday, todayStr }) {
+function WeekGrid({ filteredStaff, weekDates, getEntry, getDayFTE, nwMap, setEditingCell, setDrillDay, editingName, setEditingName, tempName, setTempName, updateStaff, staff, compactMode, getDayAlerts, dayNotes, updateDayNotes, alertSettings, getDailyStats, setDailyStat, setHoliday, todayStr, canEdit }) {
   const [confirmHolidayDs, setConfirmHolidayDs] = useState(null);
   return (
     <div style={{overflowX:"auto",overflowY:"auto",maxHeight:"calc(100vh - 220px)"}}>
       <table style={{width:"100%",borderCollapse:"separate",borderSpacing:0,minWidth:860}}>
         <thead style={{position:"sticky",top:0,zIndex:20}}>
           <tr>
-            <th style={{...thS,minWidth:155,background:"#fff",position:"sticky",left:0,zIndex:30,textAlign:"left",paddingLeft:12}}>Staff Member</th>
+            <th style={{...thS,minWidth:155,background:"#fff",position:"sticky",left:0,zIndex:30,textAlign:"left",paddingLeft:12}}>
+              <div style={{display:"flex",alignItems:"center",gap:6}}>
+                <span>Staff Member</span>
+                {hourMismatches.length > 0 ? (
+                  <button onClick={()=>setShowHourAlerts(v=>!v)}
+                    title={hourMismatches.length + " staff with hour mismatches"}
+                    style={{display:"flex",alignItems:"center",gap:3,padding:"2px 7px",borderRadius:99,border:"none",cursor:"pointer",
+                      background:showHourAlerts?"#fef2f2":"#fff7ed",
+                      color:showHourAlerts?"#dc2626":"#d97706",
+                      fontSize:10,fontWeight:800,whiteSpace:"nowrap"}}>
+                    {"⚠️ " + hourMismatches.length}
+                  </button>
+                ) : (
+                  <span style={{fontSize:10,color:"#86efac"}}>✓</span>
+                )}
+              </div>
+              {showHourAlerts && hourMismatches.length > 0 && (
+                <div style={{position:"absolute",top:"100%",left:0,zIndex:100,width:310,
+                  background:"#fff",borderRadius:10,border:"1px solid #fca5a5",
+                  boxShadow:"0 8px 24px rgba(0,0,0,0.15)",padding:"10px 12px",marginTop:2}}>
+                  <div style={{fontSize:11,fontWeight:800,color:"#dc2626",marginBottom:8}}>Hour Mismatches This Week</div>
+                  <div style={{maxHeight:240,overflowY:"auto",display:"flex",flexDirection:"column",gap:6}}>
+                    {hourMismatches.map(({s, standardTotal, enteredTotal, diff, dayMismatches}) => {
+                      const tc = TEAM_COLORS[s.team];
+                      const isUnder = diff < 0;
+                      const isOver = diff > 0;
+                      return (
+                        <div key={s.id} style={{padding:"6px 8px",borderRadius:7,
+                          background:isUnder?"#fef2f2":isOver?"#fffbeb":"#f9fafb",
+                          border:"1px solid "+(isUnder?"#fca5a5":isOver?"#fde68a":"#e5e7eb")}}>
+                          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:3}}>
+                            <div style={{display:"flex",alignItems:"center",gap:5}}>
+                              <span style={{width:6,height:6,borderRadius:"50%",background:tc?.dot,display:"inline-block",flexShrink:0}}/>
+                              <span style={{fontSize:11,fontWeight:700,color:"#111827"}}>{s.name}</span>
+                            </div>
+                            <span style={{fontSize:11,fontWeight:800,color:isUnder?"#dc2626":isOver?"#d97706":"#374151"}}>
+                              {enteredTotal}h / {standardTotal}h
+                              {isUnder ? " (-" + Math.abs(diff) + "h)" : isOver ? " (+" + diff + "h)" : ""}
+                            </span>
+                          </div>
+                          {dayMismatches.length > 0 && (
+                            <div style={{display:"flex",gap:3,flexWrap:"wrap"}}>
+                              {dayMismatches.map(dm => (
+                                <span key={dm.ds} style={{fontSize:9,padding:"1px 5px",borderRadius:99,fontWeight:700,
+                                  background:dm.type==="missing"?"#fef2f2":"#fffbeb",
+                                  color:dm.type==="missing"?"#dc2626":"#d97706",
+                                  border:"1px solid "+(dm.type==="missing"?"#fca5a5":"#fde68a")}}>
+                                  {dm.date.toLocaleDateString("en-US",{weekday:"short"})}
+                                  {dm.type==="missing" ? " missing" : dm.type==="under" ? " " + dm.entered + "/" + dm.expected + "h" : " +" + (dm.entered-dm.expected) + "h"}
+                                </span>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <div style={{marginTop:8,fontSize:9,color:"#9ca3af"}}>Compares entered hours + non-work codes vs standard schedule</div>
+                </div>
+              )}
+            </th>
             {weekDates.map((date,i) => {
               const we = isWeekend(date); const ds = fmt(date); const fte = getDayFTE(ds);
               const alerts = getDayAlerts ? getDayAlerts(ds) : [];
@@ -1837,7 +2469,7 @@ function WeekGrid({ filteredStaff, weekDates, getEntry, getDayFTE, nwMap, setEdi
                 const holBg = "#f5f3ff";
                 return (
                   <td key={di} style={{...tdS,background:isHoliday?holBg:isToday?"#fffde7":we?"#fdf8ff":"#fff",borderBottom:"1px solid #f1f5f9",padding:3}}>
-                    <button className="cell-btn" onClick={()=>setEditingCell({staffId:s.id,dateStr:ds})} style={{
+                    <button className="cell-btn" onClick={()=>canEdit&&setEditingCell({staffId:s.id,dateStr:ds})} style={{
                       width:"100%",minHeight:compactMode?30:52,borderRadius:7,cursor:"pointer",padding:compactMode?"2px 5px":"4px 5px",
                       display:"flex",flexDirection:"column",alignItems:"stretch",justifyContent:"center",gap:2,
                       border:"1px solid "+(hasData?"#dbeafe":isHoliday?"#c4b5fd":"#f1f5f9"),
@@ -1899,11 +2531,21 @@ function WeekGrid({ filteredStaff, weekDates, getEntry, getDayFTE, nwMap, setEdi
                             </div>
                           );
                         }
-                        // Normal working day: hours + team
+                        // Normal working day: hours + team + location side by side
                         return (
-                          <div key={si} style={{display:"flex",alignItems:"center",gap:3,padding:"1px 3px",borderRadius:4,background:tc?.bg||"#f0f7ff",borderLeft:"2px solid "+(tc?.dot||"#3b82f6")}}>
-                            <span style={{fontSize:11,fontWeight:700,color:"#1e3a5f",flexShrink:0}}>{hrs}h</span>
-                            <span style={{fontSize:9,color:tc?.text||"#1e40af",fontWeight:600,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",flex:1}}>{e.team||s.team}</span>
+                          <div key={si} style={{display:"flex",alignItems:"center",gap:0,borderRadius:5,overflow:"hidden",border:"1.5px solid "+(tc?.dot||"#3b82f6"),background:tc?.bg||"#f0f7ff"}}>
+                            {/* Hours + team pill */}
+                            <div style={{display:"flex",alignItems:"center",gap:3,padding:"2px 5px",flexShrink:0}}>
+                              <span style={{fontSize:11,fontWeight:800,color:tc?.text||"#1e40af"}}>{hrs}h</span>
+                              <span style={{fontSize:9,fontWeight:700,color:tc?.text||"#1e40af",whiteSpace:"nowrap"}}>{e.team||s.team}</span>
+                            </div>
+                            {/* Location badge — solid team colour divider */}
+                            {e.location && <>
+                              <div style={{width:1,alignSelf:"stretch",background:tc?.dot||"#3b82f6",opacity:0.4}} />
+                              <div style={{padding:"2px 5px",background:tc?.dot||"#3b82f6",display:"flex",alignItems:"center"}}>
+                                <span style={{fontSize:8,fontWeight:800,color:"#fff",whiteSpace:"nowrap",letterSpacing:"0.03em"}}>{e.location}</span>
+                              </div>
+                            </>}
                           </div>
                         );
                       }) : isHoliday ? <span style={{fontSize:9,color:"#7c3aed",fontWeight:700,textAlign:"center",width:"100%"}}>HOL</span>
@@ -2088,7 +2730,7 @@ function NonWorkEditor({ nonWorkTypes, updateNonWorkTypes, onClose }) {
 }
 
 // ─── Cell Editor (multi-segment) ─────────────────────────────────────────────
-function CellEditor({ staffId, dateStr, staff, getEntry, setEntrySegments, nwMap, nonWorkTypes, onClose, getDailyStats }) {
+function CellEditor({ staffId, dateStr, staff, getEntry, setEntrySegments, nwMap, nonWorkTypes, onClose, getDailyStats, locations=[] }) {
   const s = staff.find(x=>x.id===staffId);
   const isHoliday = getDailyStats ? getDailyStats(dateStr)?.holiday : false;
   const [segs, setSegs] = useState(() => {
@@ -2211,6 +2853,22 @@ function CellEditor({ staffId, dateStr, staff, getEntry, setEntrySegments, nwMap
                   </div>
                 </div>
 
+                {/* Location dropdown */}
+                {(() => {
+                  const teamLocations = locations.filter(l => l.team === (sg.team||s?.team));
+                  if (!teamLocations.length) return null;
+                  return (
+                    <div style={{marginBottom:8}}>
+                      <label style={{...lbl,fontSize:10}}>📍 Location</label>
+                      <select value={sg.location||""} onChange={e=>updateSeg(i,"location",e.target.value)}
+                        style={{...sel,fontSize:12,padding:"5px 8px"}}>
+                        <option value="">— No specific location —</option>
+                        {teamLocations.map(l=><option key={l.id} value={l.name}>{l.name}</option>)}
+                      </select>
+                    </div>
+                  );
+                })()}
+
                 {/* Per-segment comment */}
                 <div>
                   <label style={{...lbl,fontSize:10}}>💬 Note / Comment</label>
@@ -2311,6 +2969,248 @@ function DayDrillDown({ date, staff, getEntry, getDailyStats, setDailyStat, setH
           })}
         </div>
         <button onClick={onClose} style={{marginTop:16,width:"100%",padding:"9px",background:"#1e3a5f",color:"#fff",border:"none",borderRadius:8,fontSize:13,fontWeight:600,cursor:"pointer"}}>Close</button>
+      </div>
+    </div>
+  );
+}
+
+
+// ─── Master Schedule View ─────────────────────────────────────────────────────
+// Days across the top, 3 team sub-columns per day (Acute → Rehab → Peds).
+// Total FTE shown next to each day label. Per-team FTE in sub-header row.
+function MasterScheduleView({ staff, filterTeam }) {
+  const DAY_LABELS = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+  const MASTER_TEAMS = ["Acute","Rehab","Peds"];
+  const [teamFilter, setTeamFilter] = useState("All"); // local override
+  const [compact, setCompact] = useState(true);
+
+  const activeStaff = sortByName(staff.filter(s => !s.archived));
+
+  const getSched = (s) => {
+    const raw = s.defaultSchedule && s.defaultSchedule.length > 0
+      ? s.defaultSchedule
+      : DAY_LABELS.map((_,i) => ({day:i, team:s.team, hours:i===0||i===6?0:8}));
+    return DAY_LABELS.map((_,i) => {
+      const found = raw.find(d=>Number(d.day)===i) || raw[i];
+      return found ? {...found, day:i} : {day:i, team:s.team, hours:i===0||i===6?0:8};
+    });
+  };
+
+  // Get all teams a staff works across their week (for multi-area detection)
+  const getStaffTeams = (s) => {
+    const sched = getSched(s);
+    const teams = new Set();
+    sched.forEach(d => { if (Number(d.hours) > 0) teams.add(d.team || s.team); });
+    return [...teams];
+  };
+
+  // Which teams to show as columns (filtered view = 1 col, All = 3 cols)
+  const visibleTeams = teamFilter === "All" ? MASTER_TEAMS : [teamFilter];
+
+  // Staff to show: if team filter active, show staff who work in that team at least 1 day
+  const displayStaff = activeStaff.filter(s => {
+    if (teamFilter === "All") return true;
+    const sched = getSched(s);
+    return sched.some(d => Number(d.hours) > 0 && (d.team || s.team) === teamFilter);
+  });
+
+  // FTE helpers
+  const getDayTeamFTE = (di, team) =>
+    activeStaff.reduce((sum, s) => {
+      const de = getSched(s)[di] || {};
+      const hrs = Number(de.hours) || 0;
+      const et = de.team || s.team;
+      return sum + (hrs > 0 && et === team ? hrs/8 : 0);
+    }, 0);
+
+  const getDayTotalFTE = (di, teamScope) =>
+    activeStaff.reduce((sum, s) => {
+      const de = getSched(s)[di] || {};
+      const hrs = Number(de.hours) || 0;
+      const et = de.team || s.team;
+      if (teamScope !== "All" && et !== teamScope) return sum;
+      return sum + (hrs/8);
+    }, 0);
+
+  const fmtFTE = (v) => v > 0 ? (v % 1 === 0 ? v : v.toFixed(1)) : null;
+
+  const R = compact ? 3 : 7;   // row padding vertical
+  const FS = compact ? 10 : 12; // font size in cells
+  const NH = compact ? 20 : 28; // name col font
+
+  return (
+    <div>
+      {/* Header + controls */}
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:8,marginBottom:12}}>
+        <div>
+          <div style={{fontSize:17,fontWeight:800,color:"#1e3a5f"}}>📋 Master Schedule</div>
+          <div style={{fontSize:11,color:"#6b7280",marginTop:1}}>Standard recurring schedule · {displayStaff.length} staff shown</div>
+        </div>
+        <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap"}}>
+          {/* Team filter toggle */}
+          <div style={{display:"flex",gap:2,background:"#f1f5f9",borderRadius:8,padding:2}}>
+            {["All",...MASTER_TEAMS].map(t => {
+              const tc = TEAM_COLORS[t];
+              const active = teamFilter === t;
+              return (
+                <button key={t} onClick={()=>setTeamFilter(t)} style={{
+                  padding:"4px 10px", borderRadius:6, fontSize:11, fontWeight:700, cursor:"pointer", border:"none",
+                  background: active ? (tc?.dot || "#1e3a5f") : "transparent",
+                  color: active ? "#fff" : "#6b7280",
+                  transition:"all 0.15s"
+                }}>{t}</button>
+              );
+            })}
+          </div>
+          {/* Compact toggle */}
+          <button onClick={()=>setCompact(v=>!v)} style={{
+            padding:"4px 10px", borderRadius:7, fontSize:11, fontWeight:700, cursor:"pointer",
+            border:"1px solid #e5e7eb", background: compact?"#1e3a5f":"#fff",
+            color: compact?"#fff":"#6b7280"
+          }}>{compact?"⊞ Compact":"⊟ Spacious"}</button>
+        </div>
+      </div>
+
+      <div style={{overflowX:"auto"}}>
+        <table style={{borderCollapse:"collapse",width:"100%",minWidth: teamFilter==="All"?900:500}}>
+          <thead>
+            {/* Row 1: day names + total FTE */}
+            <tr style={{background:"#f8fafc"}}>
+              <th rowSpan={2} style={{
+                padding:compact?"6px 10px":"10px 14px",
+                textAlign:"left",fontSize:10,fontWeight:700,color:"#6b7280",
+                borderBottom:"2px solid #e5e7eb",whiteSpace:"nowrap",
+                minWidth:compact?100:130,verticalAlign:"bottom",
+                position:"sticky",left:0,background:"#f8fafc",zIndex:2
+              }}>Name</th>
+              {DAY_LABELS.map((d,di) => {
+                const isWE = di===0||di===6;
+                const totalFTE = getDayTotalFTE(di, teamFilter);
+                const fte = fmtFTE(totalFTE);
+                return (
+                  <th key={d} colSpan={visibleTeams.length} style={{
+                    padding:compact?"4px 2px 2px":"6px 4px 3px", textAlign:"center",
+                    color:isWE?"#7c3aed":"#1e3a5f",
+                    background:isWE?"#faf5ff":"#f8fafc",
+                    borderLeft:"2px solid "+(isWE?"#e9d5ff":"#e5e7eb"),
+                    borderBottom:"1px solid "+(isWE?"#e9d5ff":"#e5e7eb"),
+                  }}>
+                    <div style={{fontSize:compact?10:12,fontWeight:800}}>{d}</div>
+                    {fte && <div style={{fontSize:9,fontWeight:600,color:isWE?"#7c3aed":"#64748b",marginTop:1}}>{fte} FTE</div>}
+                  </th>
+                );
+              })}
+            </tr>
+            {/* Row 2: team sub-headers */}
+            <tr style={{background:"#f8fafc"}}>
+              {DAY_LABELS.map((d,di) => {
+                const isWE = di===0||di===6;
+                return visibleTeams.map((team,ti) => {
+                  const tc = TEAM_COLORS[team];
+                  const fte = fmtFTE(getDayTeamFTE(di, team));
+                  return (
+                    <th key={d+team} style={{
+                      padding:compact?"2px 2px 4px":"3px 3px 6px", textAlign:"center",
+                      fontSize:8, fontWeight:700, color:tc?.text||"#374151",
+                      background:isWE?(tc?.bg+"bb"):(tc?.bg||"#f9fafb"),
+                      borderLeft:ti===0?"2px solid "+(isWE?"#e9d5ff":"#e5e7eb"):"1px solid "+tc?.dot+"22",
+                      borderBottom:"2px solid #e5e7eb",
+                      minWidth:compact?36:44,
+                    }}>
+                      {visibleTeams.length > 1 && <div style={{textTransform:"uppercase",letterSpacing:"0.03em"}}>{team.slice(0,3)}</div>}
+                      <div style={{fontSize:9,fontWeight:800,color:tc?.text}}>
+                        {fte || <span style={{color:"#e5e7eb"}}>—</span>}
+                      </div>
+                    </th>
+                  );
+                });
+              })}
+            </tr>
+          </thead>
+          <tbody>
+            {displayStaff.map(s => {
+              const homeTc = TEAM_COLORS[s.team];
+              const sched = getSched(s);
+              const weekHrs = sched.reduce((a,d)=>a+(Number(d.hours)||0),0);
+              const staffTeams = getStaffTeams(s);
+              const isMultiTeam = staffTeams.length > 1;
+              return (
+                <tr key={s.id} style={{borderBottom:"1px solid #f3f4f6", background:"#fff"}}
+                  onMouseEnter={e=>e.currentTarget.style.background="#f8fafc"}
+                  onMouseLeave={e=>e.currentTarget.style.background="#fff"}>
+                  {/* Name cell — sticky */}
+                  <td style={{
+                    padding:compact?"3px 8px":"6px 10px",
+                    whiteSpace:"nowrap", borderRight:"1px solid #f3f4f6",
+                    position:"sticky", left:0, background:"inherit", zIndex:1
+                  }}>
+                    <div style={{display:"flex",alignItems:"center",gap:5}}>
+                      <span style={{width:6,height:6,borderRadius:"50%",background:homeTc?.dot,flexShrink:0,display:"inline-block"}} />
+                      <span style={{fontSize:compact?10:12,fontWeight:700,color:"#111827"}}>{s.name}</span>
+                      {isMultiTeam && (
+                        <span title={`Works in: ${staffTeams.join(", ")}`} style={{fontSize:8,padding:"1px 4px",borderRadius:99,background:"#fef9c3",color:"#92400e",fontWeight:700,flexShrink:0}}>multi</span>
+                      )}
+                    </div>
+                    {!compact && (
+                      <div style={{display:"flex",gap:4,marginLeft:11,marginTop:1,flexWrap:"wrap"}}>
+                        {staffTeams.map(t => {
+                          const tc2 = TEAM_COLORS[t];
+                          return <span key={t} style={{fontSize:8,color:tc2?.text,fontWeight:600}}>{t}</span>;
+                        })}
+                        <span style={{fontSize:8,color:"#9ca3af"}}>· {weekHrs}h/wk</span>
+                      </div>
+                    )}
+                  </td>
+                  {/* Day × team cells */}
+                  {DAY_LABELS.map((d,di) => {
+                    const isWE = di===0||di===6;
+                    const dayEntry = sched[di] || {};
+                    const hrs = Number(dayEntry.hours) || 0;
+                    const effectiveTeam = dayEntry.team || s.team;
+                    return visibleTeams.map((team,ti) => {
+                      const tc2 = TEAM_COLORS[team];
+                      const isWorking = hrs > 0 && effectiveTeam === team;
+                      const isOff = hrs === 0 && (teamFilter === "All" ? team === s.team : true);
+                      return (
+                        <td key={d+team} style={{
+                          padding:compact?"2px":"4px 3px", textAlign:"center",
+                          background: isWE ? (isWorking ? tc2?.bg : "#fdfaff") : (isWorking ? tc2?.bg+"99" : "transparent"),
+                          borderLeft:ti===0?"2px solid "+(isWE?"#e9d5ff":"#e5e7eb"):"1px solid #f3f4f6",
+                        }}>
+                          {isWorking ? (
+                            <div style={{
+                              display:"inline-flex",alignItems:"center",justifyContent:"center",
+                              padding:compact?"1px 3px":"3px 5px",
+                              borderRadius:4,
+                              border:"1.5px solid "+(tc2?.dot||"#93c5fd"),
+                              background:"#fff",
+                              minWidth:compact?28:36
+                            }}>
+                              <span style={{fontSize:FS,fontWeight:800,color:tc2?.text||"#1e3a5f",lineHeight:1}}>{hrs}h</span>
+                            </div>
+                          ) : isOff ? (
+                            <span style={{fontSize:8,color:isWE?"#c4b5fd":"#e5e7eb",fontWeight:600}}>·</span>
+                          ) : null}
+                        </td>
+                      );
+                    });
+                  })}
+                </tr>
+              );
+            })}
+            {displayStaff.length === 0 && (
+              <tr><td colSpan={1+7*visibleTeams.length} style={{padding:32,textAlign:"center",color:"#9ca3af",fontSize:13}}>No staff found for this team filter</td></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      {/* Legend */}
+      <div style={{marginTop:8,display:"flex",gap:16,flexWrap:"wrap",fontSize:10,color:"#9ca3af"}}>
+        <span>FTE per day shown in headers</span>
+        <span>·</span>
+        <span><b style={{color:"#92400e"}}>multi</b> badge = works across teams in same week</span>
+        {teamFilter !== "All" && <span>· Showing all staff who work in <b style={{color:TEAM_COLORS[teamFilter]?.text}}>{teamFilter}</b> at least 1 day</span>}
       </div>
     </div>
   );
@@ -2664,8 +3564,10 @@ function VisitsTab({ visitData, updateVisitData, staff, weekStart, getDayFTE }) 
       Peds:  {evals:0, visits:0, fte:0},
       Acute: {evals:0, visits:0, fte:0},
     };
-    let workDays = 0;
-    let totalFTE = 0; // sum of daily FTE across all days (incl. weekends)
+    let totalDays = 0;   // all calendar days in range
+    let staffedDays = 0; // days where FTE > 0 (actually staffed)
+    let totalFTE = 0;
+    const teamStaffedDays = { Rehab:0, Peds:0, Acute:0 };
     viewWeeks.forEach(({wStart, wEnd, rec}) => {
       TEAMS.forEach(t => {
         byTeam[t].evals  += rec[t]?.evals  || 0;
@@ -2673,26 +3575,35 @@ function VisitsTab({ visitData, updateVisitData, staff, weekStart, getDayFTE }) 
         totalEvals  += rec[t]?.evals  || 0;
         totalVisits += rec[t]?.visits || 0;
       });
-      // Walk all 7 days — dept runs 7-day schedule including weekends
+      // Walk all 7 days — include weekends since dept runs 7-day schedule
       const cur2 = new Date(wStart+"T12:00:00");
       for (let di=0; di<7; di++, cur2.setDate(cur2.getDate()+1)) {
         const ds2 = fmt(cur2);
         if (ds2 < viewStart || ds2 > viewEnd) continue;
-        workDays++;
+        totalDays++;
         const fte = getDayFTE ? getDayFTE(ds2) : null;
-        if (fte) {
-          totalFTE += Number(fte.total)||0;
-          TEAMS.forEach(t => { byTeam[t].fte += Number(fte.byTeam?.[t])||0; });
+        const dayTotal = fte ? (Number(fte.total)||0) : 0;
+        if (dayTotal > 0) {
+          staffedDays++;
+          totalFTE += dayTotal;
+          TEAMS.forEach(t => {
+            const tf = Number(fte.byTeam?.[t])||0;
+            byTeam[t].fte += tf;
+            if (tf > 0) teamStaffedDays[t]++;
+          });
         }
       }
     });
-    const avgFTEPerDay = workDays > 0 ? totalFTE / workDays : 0;
+    // Use staffed days (not total days) so weekends with no entries don't skew averages
+    const workDays = staffedDays;
+    const avgFTEPerDay = staffedDays > 0 ? totalFTE / staffedDays : 0;
     const avgVisitsPerFTEDay = totalFTE > 0 ? totalVisits / totalFTE : 0;
-    const avgVisitsPerDay = workDays > 0 ? totalVisits / workDays : 0;
+    const avgVisitsPerDay = staffedDays > 0 ? totalVisits / staffedDays : 0;
     // Per-team visits/FTE/day and forecast
     TEAMS.forEach(t => {
+      const tDays = teamStaffedDays[t] || staffedDays || 1;
       byTeam[t].visitsPerFTEDay = byTeam[t].fte > 0 ? byTeam[t].visits / byTeam[t].fte : 0;
-      byTeam[t].avgFTEPerDay = workDays > 0 ? byTeam[t].fte / workDays : 0;
+      byTeam[t].avgFTEPerDay = tDays > 0 ? byTeam[t].fte / tDays : 0;
       byTeam[t].forecastPerPerson = byTeam[t].visitsPerFTEDay * ANNUAL_WORK_DAYS;
       const tGoal = TEAM_VISIT_GOALS[t];
       byTeam[t].visitDayTarget = tGoal?.visitsPerFTEDay || VISIT_GOAL_PER_PERSON / ANNUAL_WORK_DAYS;
@@ -2794,6 +3705,31 @@ function VisitsTab({ visitData, updateVisitData, staff, weekStart, getDayFTE }) 
                 <div style={{height:"100%",width:Math.min(metrics.goalPct,100)+"%",background:goalColor,borderRadius:3,transition:"width 0.4s"}} />
               </div>
             </div>
+          </div>
+        </div>
+
+        {/* Calculation breakdown — helps verify math */}
+        <div style={{background:"#fff",borderRadius:14,padding:16,border:"1px solid #e5e7eb",fontSize:11,color:"#374151"}}>
+          <div style={{fontSize:12,fontWeight:800,color:"#1e3a5f",marginBottom:10}}>📐 Calculation Breakdown</div>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(200px,1fr))",gap:8}}>
+            {[
+              {label:"Total visits in range",    value: metrics.totalVisits.toLocaleString()},
+              {label:"Staffed days counted",      value: metrics.workDays},
+              {label:"Sum of FTE-days",           value: metrics.totalFTE.toFixed(1), note:"FTE summed across all staffed days"},
+              {label:"Avg FTE per staffed day",   value: metrics.avgFTEPerDay.toFixed(2)},
+              {label:"Visits / FTE-day",          value: metrics.avgVisitsPerFTEDay.toFixed(3), note:"= total visits ÷ FTE-days"},
+              {label:"× Annual work days",        value: ANNUAL_WORK_DAYS, note:"adjust this constant if needed"},
+              {label:"= Per therapist / year",    value: Math.round(metrics.forecastPerPerson).toLocaleString(), bold:true},
+            ].map(({label,value,note,bold})=>(
+              <div key={label} style={{padding:"8px 10px",borderRadius:8,background:"#f8fafc",border:"1px solid #f1f5f9"}}>
+                <div style={{fontSize:10,color:"#6b7280"}}>{label}{note && <span style={{color:"#9ca3af"}}> — {note}</span>}</div>
+                <div style={{fontSize:bold?16:14,fontWeight:bold?800:700,color:bold?"#1e3a5f":"#374151",marginTop:2}}>{value}</div>
+              </div>
+            ))}
+          </div>
+          <div style={{marginTop:10,padding:"8px 12px",background:"#fffbeb",borderRadius:8,border:"1px solid #fde68a",fontSize:10,color:"#92400e"}}>
+            <b>Formula:</b> (Total Visits ÷ Sum of FTE-days) × {ANNUAL_WORK_DAYS} annual days = Per Therapist/Year &nbsp;·&nbsp;
+            If this number looks high, check: (1) Is <b>ANNUAL_WORK_DAYS = {ANNUAL_WORK_DAYS}</b> correct for your dept? (2) Are weekend FTE entries inflating the FTE-day sum?
           </div>
         </div>
 
@@ -3278,16 +4214,10 @@ function StaffTab({ staff, updateStaff, entries, updateEntries, weekStart, nonWo
   const unarchiveStaff = (id) => updateStaff(staff.map(s => s.id === id ? { ...s, archived: false } : s));
   const archivedCount = staff.filter(s => s.archived).length;
 
-  // Calc weekly hours from actual entries for current week
-  const weekDates = getWeekDates(weekStart);
-  const getWeeklyHours = (staffId) => {
-    let total = 0;
-    weekDates.forEach(date => {
-      const raw = entries[`${staffId}_${fmt(date)}`];
-      const segs = raw ? (Array.isArray(raw) ? raw : [raw]) : [];
-      segs.forEach(e => { total += Number(e.hours) || 0; });
-    });
-    return total;
+  // Always derive weekly hours from defaultSchedule (standard template only, no actual entries)
+  const getWeeklyHours = (s) => {
+    const sched = s.defaultSchedule || DAYS.map((_,i)=>({day:i,team:s.team,hours:i===0||i===6?0:8}));
+    return sched.reduce((a,d) => a + (Number(d.hours)||0), 0);
   };
 
   // Compute all-time non-work totals for a staff member across all entries
@@ -3409,18 +4339,24 @@ function StaffTab({ staff, updateStaff, entries, updateEntries, weekStart, nonWo
       </div>
 
       {/* Staff cards */}
-      <div style={{ display: "grid", gap: 8 }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
         {filtered.map(s => {
           const tc = TEAM_COLORS[s.team];
           const isOpen = editingId === s.id;
-          const sched = s.defaultSchedule || DAYS.map((_,i) => ({ day: i, team: s.team, hours: i===0||i===6?0:8 }));
-          const actualHrs = getWeeklyHours(s.id);
+          // Always normalize to exactly 7 entries indexed 0-6 by day number
+          const rawSched = s.defaultSchedule && s.defaultSchedule.length > 0
+            ? s.defaultSchedule
+            : DAYS.map((_,i) => ({ day: i, team: s.team, hours: i===0||i===6?0:8 }));
+          const sched = DAYS.map((_,i) => {
+            const found = rawSched.find(d => Number(d.day) === i) || rawSched[i];
+            return found ? { ...found, day: i } : { day: i, team: s.team, hours: i===0||i===6?0:8 };
+          });
           const schedHrs = sched.reduce((a, d) => a + (Number(d.hours) || 0), 0);
-          const weeklyHrs = actualHrs > 0 ? actualHrs : schedHrs;
-          const autoFTE = +(weeklyHrs / 40).toFixed(2);
+          const weeklyHrs = schedHrs;
+          const autoFTE = +(schedHrs / 40).toFixed(2);
 
           return (
-            <div key={s.id} style={{ background:s.archived?"#f9fafb":"#fff", borderRadius:12, border:"1px solid #e5e7eb", overflow:"hidden", boxShadow:"0 1px 3px rgba(0,0,0,0.04)", opacity:s.archived?0.75:1 }}>
+            <div key={s.id} style={{ background:s.archived?"#f9fafb":"#fff", borderRadius:12, border:"1px solid #e5e7eb", overflow:"visible", boxShadow:"0 1px 3px rgba(0,0,0,0.04)", opacity:s.archived?0.75:1, width:"100%" }}>
               {s.archived && (
                 <div style={{background:"#f3f4f6",borderBottom:"1px solid #e5e7eb",padding:"4px 16px",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
                   <span style={{fontSize:11,fontWeight:700,color:"#6b7280"}}>📦 Archived — hidden from all scheduling views</span>
@@ -3450,9 +4386,9 @@ function StaffTab({ staff, updateStaff, entries, updateEntries, weekStart, nonWo
                 </select>
                 {/* Weekly hrs */}
                 <div style={{ textAlign: "center", minWidth: 64 }}>
-                  <div style={{ fontSize: 10, color: "#9ca3af", fontWeight: 600, textTransform: "uppercase" }}>Wk Hrs</div>
+                  <div style={{ fontSize: 10, color: "#9ca3af", fontWeight: 600, textTransform: "uppercase" }}>Std Hrs</div>
                   <div style={{ fontSize: 14, fontWeight: 800, color: "#1e3a5f" }}>{weeklyHrs}h</div>
-                  <div style={{ fontSize: 9, color: actualHrs > 0 ? "#15803d" : "#9ca3af" }}>{actualHrs > 0 ? "actual" : "sched"}</div>
+                  <div style={{ fontSize: 9, color: "#9ca3af" }}>standard</div>
                 </div>
                 {/* Auto FTE */}
                 <div style={{ textAlign: "center", minWidth: 54 }}>
@@ -3514,8 +4450,6 @@ function StaffTab({ staff, updateStaff, entries, updateEntries, weekStart, nonWo
                   </div>
                   <div style={{ fontSize:11, color:"#6b7280", marginTop:8 }}>Note: This fills in weeks that have no hours yet. Existing entries are not overwritten.</div>
                 </div>
-              )}
-
               )}
 
               {/* Staff Notes panel */}
@@ -3620,20 +4554,22 @@ function StaffTab({ staff, updateStaff, entries, updateEntries, weekStart, nonWo
 
               {/* Custom schedule panel */}
               {isOpen && (
-                <div style={{ borderTop: "1px solid #f3f4f6", padding: "14px 16px", background: "#f8fafc" }}>
-                  <div style={{ fontSize: 12, fontWeight: 700, color: "#374151", marginBottom: 10 }}>
-                    Default Weekly Schedule
+                <div style={{ borderTop: "3px solid #3b82f6", padding: "16px 16px", background: "#eff6ff" }}>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: "#1d4ed8", marginBottom: 12 }}>
+                    📅 Default Weekly Schedule
                     <span style={{ fontSize: 11, color: "#6b7280", fontWeight: 400, marginLeft: 8 }}>
-                      Set per-day team and hours — used as the template when bulk uploading
+                      Set hours and team per day
                     </span>
                   </div>
-                  <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 6 }}>
+                  <div style={{ overflowX: "auto", paddingBottom: 4 }}>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(7, minmax(90px, 1fr))", gap: 8, minWidth: 600 }}>
                     {sched.map((dayEntry, di) => {
                       const dayTc = TEAM_COLORS[dayEntry.team || s.team];
                       const isWE = di === 0 || di === 6;
+                      const isOff = Number(dayEntry.hours) === 0;
                       return (
-                        <div key={di} style={{ borderRadius: 8, border: "1px solid " + (isWE ? "#e9d5ff" : "#e5e7eb"), background: isWE ? "#faf5ff" : "#fff", padding: "8px 6px" }}>
-                          <div style={{ fontSize: 10, fontWeight: 700, color: isWE ? "#7c3aed" : "#6b7280", textAlign: "center", marginBottom: 5, textTransform: "uppercase" }}>{DAYS[di]}</div>
+                        <div key={di} style={{ borderRadius: 8, border: "2px solid " + (isWE ? "#d8b4fe" : isOff ? "#e5e7eb" : dayTc?.dot||"#3b82f6"), background: isWE ? "#faf5ff" : isOff ? "#f9fafb" : "#fff", padding: "10px 8px", display: "flex", flexDirection: "column", gap: 6 }}>
+                          <div style={{ fontSize: 11, fontWeight: 800, color: isWE ? "#7c3aed" : isOff ? "#9ca3af" : "#374151", textAlign: "center", textTransform: "uppercase", letterSpacing: "0.05em" }}>{DAYS[di]}</div>
                           <input type="number" min="0" max="24" step="0.5"
                             value={dayEntry.hours === 0 && isWE ? "" : dayEntry.hours}
                             placeholder={isWE ? "OFF" : "8"}
@@ -3641,24 +4577,24 @@ function StaffTab({ staff, updateStaff, entries, updateEntries, weekStart, nonWo
                               const newSched = sched.map((d, i) => i === di ? { ...d, hours: e.target.value === "" ? 0 : Number(e.target.value) } : d);
                               update(s.id, "defaultSchedule", newSched);
                             }}
-                            style={{ width: "100%", padding: "4px 5px", border: "1px solid #e5e7eb", borderRadius: 5, fontSize: 12, textAlign: "center", boxSizing: "border-box", background: isWE ? "#faf5ff" : "#fff" }} />
+                            style={{ width: "100%", padding: "7px 6px", border: "1px solid " + (isOff?"#e5e7eb":dayTc?.dot+"88"||"#93c5fd"), borderRadius: 6, fontSize: 14, fontWeight: 800, textAlign: "center", boxSizing: "border-box", background: isOff ? "#f3f4f6" : "#fff", color: isOff ? "#9ca3af" : "#1e3a5f" }} />
                           <select
                             value={dayEntry.team || s.team}
                             onChange={e => {
                               const newSched = sched.map((d, i) => i === di ? { ...d, team: e.target.value } : d);
                               update(s.id, "defaultSchedule", newSched);
                             }}
-                            style={{ marginTop: 4, width: "100%", padding: "3px 4px", border: "1px solid " + (dayTc?.dot || "#e5e7eb"), borderRadius: 5, fontSize: 9, fontWeight: 600, background: dayTc?.bg || "#f9fafb", color: dayTc?.text || "#374151", boxSizing: "border-box", cursor: "pointer" }}>
+                            style={{ width: "100%", padding: "5px 4px", border: "1px solid " + (dayTc?.dot || "#e5e7eb"), borderRadius: 6, fontSize: 11, fontWeight: 600, background: isOff ? "#f3f4f6" : dayTc?.bg || "#f9fafb", color: isOff ? "#9ca3af" : dayTc?.text || "#374151", boxSizing: "border-box", cursor: "pointer" }}>
                             {TEAMS.map(t => <option key={t}>{t}</option>)}
                           </select>
                         </div>
                       );
                     })}
                   </div>
+                  </div>
                   <div style={{ marginTop: 10, fontSize: 11, color: "#6b7280", display: "flex", gap: 16 }}>
-                    <span>Schedule total: <b style={{ color: "#1e3a5f" }}>{schedHrs}h</b></span>
-                    <span>Schedule FTE: <b style={{ color: schedHrs/40 >= 1 ? "#15803d" : schedHrs/40 >= 0.5 ? "#d97706" : "#dc2626" }}>{(schedHrs/40).toFixed(2)}</b></span>
-                    {actualHrs > 0 && <span style={{ color: "#15803d" }}>Actual this week: <b>{actualHrs}h</b></span>}
+                    <span>Standard weekly total: <b style={{ color: "#1e3a5f" }}>{schedHrs}h</b></span>
+                    <span>FTE: <b style={{ color: schedHrs/40 >= 1 ? "#15803d" : schedHrs/40 >= 0.5 ? "#d97706" : "#dc2626" }}>{(schedHrs/40).toFixed(2)}</b></span>
                   </div>
                 </div>
               )}
@@ -3997,7 +4933,7 @@ function BatchEntryModal({ staff, entries, updateEntries, nonWorkTypes, onClose 
 }
 
 // ─── Backup / Restore Modal ──────────────────────────────────────────────────
-function BackupRestoreModal({ onClose, updateStaff, updateEntries, updateDailyStats, updatePtoBalances, updateNonWorkTypes, updateAlertSettings, updateDayNotes, updateVisitData }) {
+function BackupRestoreModal({ onClose, updateStaff, updateEntries, updateDailyStats, updatePtoBalances, updateNonWorkTypes, updateAlertSettings, updateDayNotes, updateVisitData, updateLocations }) {
   const [status, setStatus] = useState(null);
   const fileRef = useRef();
 
@@ -4026,8 +4962,12 @@ function BackupRestoreModal({ onClose, updateStaff, updateEntries, updateDailySt
       };
       const staffRows = sheetData("Staff");
       if (!staffRows.length) throw new Error("Staff sheet missing or empty — is this a StaffPlan backup file?");
-      const newStaff = staffRows.filter(r=>r[0]).map(r => ({
-        id:Number(r[0]), name:String(r[1]), team:String(r[2]),
+      // Log any rows being dropped so we can debug missing staff
+      const droppedStaff = staffRows.filter(r=>!r[0]||!r[1]||!r[2]);
+      if (droppedStaff.length) console.warn("Dropped staff rows:", droppedStaff);
+      const newStaff = staffRows.filter(r=>r[1]&&r[2]).map(r => ({
+        id: r[0] ? Number(r[0]) : Date.now() + Math.random(),
+        name:String(r[1]), team:String(r[2]),
         fte:Number(r[3])||1, defaultHours:Number(r[4])||8,
         shiftStart:r[5]||"08:00", shiftEnd:r[6]||"16:00",
         defaultSchedule:(() => { try { return JSON.parse(r[7]||"[]"); } catch(e) { return []; } })(),
@@ -4046,6 +4986,8 @@ function BackupRestoreModal({ onClose, updateStaff, updateEntries, updateDailySt
       ptoRows.filter(r=>r[0]).forEach(r => { const id=String(r[0]); if(!newPTO[id]) newPTO[id]={}; newPTO[id][r[1]]=Number(r[2])||0; });
       const nwRows = sheetData("NonWorkCodes");
       const newNW = nwRows.filter(r=>r[0]).map(r => ({code:String(r[0]),label:String(r[1]),color:String(r[2])||"#6b7280"}));
+      const locRows2 = sheetData("Locations");
+      const newLocations = locRows2.filter(r=>r[1]&&r[2]).map(r => ({id:r[0]||Date.now()+Math.random(),team:String(r[1]),name:String(r[2])}));
       const alertRows = sheetData("AlertSettings");
       const newAlerts = {fteTargets:{},censusTargets:{}};
       alertRows.filter(r=>r[0]).forEach(r => {
@@ -4083,33 +5025,41 @@ function BackupRestoreModal({ onClose, updateStaff, updateEntries, updateDailySt
       const finalNW     = newNW.length ? newNW : null;
       const finalAlerts = Object.keys(newAlerts.fteTargets).length ? newAlerts : null;
       const finalVisits = Object.keys(newVisits).length ? newVisits : {};
-      // Save ALL keys directly via saveToStorage (handles both Claude and localStorage)
-      // and await every promise so nothing races or gets overwritten
-      await Promise.all([
-        saveToStorage("staffplan:staff",        newStaff),
-        saveToStorage("staffplan:entries",      newEntries),
-        saveToStorage("staffplan:dailyStats",   newDailyStats),
-        saveToStorage("staffplan:pto",          newPTO),
-        saveToStorage("staffplan:notes",        newNotes),
-        saveToStorage("staffplan:visits",       finalVisits),
-        finalNW     ? saveToStorage("staffplan:nonWorkTypes", finalNW)     : Promise.resolve(),
-        finalAlerts ? saveToStorage("staffplan:alerts",       finalAlerts) : Promise.resolve(),
-      ]);
-      // Update React state AFTER storage is confirmed written.
-      // isRestoringRef suppresses triggerSave so state updates don't overwrite storage.
-      // Pass flag setter via a custom event since modal doesn't have direct ref access.
+      // Clear existing data first to avoid duplicates, then save fresh
+      setStatus({ok:true, msg:"⏳ Clearing existing data..."});
+      const sb = await getSB();
+      await sb.from("entries").delete().neq("date_str", "___never___");
+      await sb.from("staff").delete().neq("id", -1);
+      await sb.from("daily_stats").delete().neq("date_str", "___never___");
+      await sb.from("pto_balances").delete().neq("staff_id", -1);
+      await sb.from("day_notes").delete().neq("date_str", "___never___");
+      await sb.from("visit_data").delete().neq("week_key", "___never___");
+      setStatus({ok:true, msg:"⏳ Saving staff..."});
+      await sbSaveStaff(newStaff);
+      setStatus({ok:true, msg:"⏳ Saving schedule entries..."});
+      await sbSaveEntries(newEntries);
+      setStatus({ok:true, msg:"⏳ Saving stats & PTO..."});
+      await sbSaveDailyStats(newDailyStats);
+      await sbSavePTO(newPTO);
+      setStatus({ok:true, msg:"⏳ Saving notes & visits..."});
+      await sbSaveNotes(newNotes);
+      await sbSaveVisits(finalVisits);
+      if (finalNW)     await sbSaveNonWorkTypes(finalNW);
+      if (finalAlerts) await sbSaveAlertSettings(finalAlerts);
+      // Update React state AFTER Supabase confirms all writes
       window.__staffplanRestoring = true;
       updateStaff(newStaff);
       updateEntries(newEntries);
       updateDailyStats(newDailyStats);
       updatePtoBalances(newPTO);
-      if (finalNW)     updateNonWorkTypes(finalNW);
-      if (finalAlerts) updateAlertSettings(finalAlerts);
+      if (finalNW)       updateNonWorkTypes(finalNW);
+      if (finalAlerts)   updateAlertSettings(finalAlerts);
+      if (newLocations.length) updateLocations(newLocations);
       updateDayNotes(newNotes);
       updateVisitData(finalVisits);
       window.__staffplanRestoring = false;
       const visitWeekCount = Object.keys(finalVisits).length;
-      setStatus({ok:true, msg:`✅ Restored! ${newStaff.length} staff · ${Object.keys(newEntries).length} schedule entries · ${Object.keys(newDailyStats).length} daily stats${visitWeekCount ? ` · ${visitWeekCount} visit weeks` : ""}. Data saved — you can close and reopen safely.`});
+      setStatus({ok:true, msg:`✅ Restored & saved to Supabase! ${newStaff.length} staff · ${Object.keys(newEntries).length} schedule entries · ${Object.keys(newDailyStats).length} daily stats${visitWeekCount ? ` · ${visitWeekCount} visit weeks` : ""}. You can safely close and reopen.`});
     } catch(err) {
       setStatus({ok:false, msg:`❌ Restore failed: ${err.message}`});
     }
@@ -4414,4 +5364,308 @@ function StatCard({ label, value, color }) {
 }
 function Row({ label, value, small }) {
   return <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}><span style={{fontSize:small?10:11,color:"#9ca3af"}}>{label}</span><span style={{fontSize:small?11:12,fontWeight:700,color:"#374151"}}>{value}</span></div>;
+}
+
+// ─── Analytics Dashboard ──────────────────────────────────────────────────────
+function AnalyticsDashboard({ currentUser }) {
+  const [events, setEvents] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [range, setRange] = useState(30); // days to look back
+  const [view, setView] = useState("overview"); // overview | logins | tabs | users
+
+  useEffect(() => {
+    sbLoadUsageEvents().then(data => { setEvents(data); setLoading(false); });
+  }, []);
+
+  const cutoff = new Date(); cutoff.setDate(cutoff.getDate() - range);
+  const filtered = events.filter(e => new Date(e.created_at) >= cutoff);
+
+  // ── Derived stats ──
+  const loginEvents = filtered.filter(e => e.event_type === "login");
+  const tabViewEvents = filtered.filter(e => e.event_type === "tab_view");
+  const tabExitEvents = filtered.filter(e => e.event_type === "tab_exit");
+
+  // Unique users
+  const uniqueUsers = [...new Set(filtered.map(e => e.user_email))];
+
+  // Logins per user
+  const loginsByUser = {};
+  loginEvents.forEach(e => { loginsByUser[e.user_email] = (loginsByUser[e.user_email] || 0) + 1; });
+
+  // Last seen per user
+  const lastSeenByUser = {};
+  filtered.forEach(e => {
+    if (!lastSeenByUser[e.user_email] || e.created_at > lastSeenByUser[e.user_email]) {
+      lastSeenByUser[e.user_email] = e.created_at;
+    }
+  });
+
+  // Tab views count
+  const tabViews = {};
+  tabViewEvents.forEach(e => {
+    const tab = e.payload?.tab || "unknown";
+    tabViews[tab] = (tabViews[tab] || 0) + 1;
+  });
+
+  // Tab avg duration (seconds)
+  const tabDurations = {};
+  const tabDurationCounts = {};
+  tabExitEvents.forEach(e => {
+    const tab = e.payload?.tab || "unknown";
+    const dur = Number(e.payload?.duration_seconds) || 0;
+    if (dur > 0 && dur < 7200) { // ignore outliers > 2hrs
+      tabDurations[tab] = (tabDurations[tab] || 0) + dur;
+      tabDurationCounts[tab] = (tabDurationCounts[tab] || 0) + 1;
+    }
+  });
+
+  // Logins by day (last N days)
+  const loginsByDay = {};
+  loginEvents.forEach(e => {
+    const day = e.created_at.slice(0, 10);
+    loginsByDay[day] = (loginsByDay[day] || 0) + 1;
+  });
+
+  // All tabs in order of views
+  const TAB_LABELS = { day:"Day", grid:"Week", master:"Master", month:"Month", year:"Year", summary:"Dept Stats", visits:"Visits", timesheet:"Timesheets", analytics:"Analytics" };
+  const sortedTabs = Object.entries(tabViews).sort((a, b) => b[1] - a[1]);
+  const maxTabViews = sortedTabs[0]?.[1] || 1;
+
+  const fmtDur = (s) => {
+    if (!s) return "—";
+    if (s < 60) return `${Math.round(s)}s`;
+    return `${Math.floor(s/60)}m ${Math.round(s%60)}s`;
+  };
+
+  const fmtDate = (iso) => {
+    if (!iso) return "—";
+    const d = new Date(iso);
+    return d.toLocaleDateString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  };
+
+  // Days array for sparkline
+  const days = Array.from({ length: range }, (_, i) => {
+    const d = new Date(); d.setDate(d.getDate() - (range - 1 - i));
+    return d.toISOString().slice(0, 10);
+  });
+  const maxDay = Math.max(...days.map(d => loginsByDay[d] || 0), 1);
+
+  const sectionStyle = { background:"#fff", borderRadius:14, border:"1px solid #e5e7eb", padding:"18px 20px" };
+  const hdr = { fontSize:13, fontWeight:800, color:"#1e3a5f", marginBottom:14, display:"flex", alignItems:"center", gap:6 };
+
+  if (loading) return (
+    <div style={{display:"flex",alignItems:"center",justifyContent:"center",padding:60,color:"#9ca3af",fontSize:14}}>
+      ⏳ Loading analytics…
+    </div>
+  );
+
+  return (
+    <div style={{ display:"flex", flexDirection:"column", gap:16 }}>
+      {/* Header + controls */}
+      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", flexWrap:"wrap", gap:8 }}>
+        <div>
+          <div style={{ fontSize:18, fontWeight:800, color:"#1e3a5f" }}>🔍 Usage Analytics</div>
+          <div style={{ fontSize:12, color:"#6b7280", marginTop:2 }}>Login frequency, page views, and time-on-page per user</div>
+        </div>
+        <div style={{ display:"flex", gap:6 }}>
+          {[7,30,90].map(d => (
+            <button key={d} onClick={() => setRange(d)} style={{
+              padding:"5px 14px", borderRadius:8, fontSize:12, fontWeight:700, cursor:"pointer",
+              border:"1px solid "+(range===d?"#3b82f6":"#e5e7eb"),
+              background:range===d?"#eff6ff":"#fff",
+              color:range===d?"#1d4ed8":"#6b7280"
+            }}>Last {d}d</button>
+          ))}
+          <button onClick={() => sbLoadUsageEvents().then(setEvents)} style={{
+            padding:"5px 12px", borderRadius:8, fontSize:12, fontWeight:700, cursor:"pointer",
+            border:"1px solid #e5e7eb", background:"#f9fafb", color:"#6b7280"
+          }}>↺ Refresh</button>
+        </div>
+      </div>
+
+      {/* KPI cards */}
+      <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill, minmax(150px,1fr))", gap:10 }}>
+        {[
+          { label:"Total Logins", value:loginEvents.length, icon:"🔑", color:"#1d4ed8" },
+          { label:"Unique Users", value:uniqueUsers.length, icon:"👤", color:"#7c3aed" },
+          { label:"Page Views", value:tabViewEvents.length, icon:"📄", color:"#0369a1" },
+          { label:"Avg Session Tabs", value: loginEvents.length > 0 ? (tabViewEvents.length / loginEvents.length).toFixed(1) : "—", icon:"🗂", color:"#15803d" },
+        ].map(k => (
+          <div key={k.label} style={{ background:"#fff", borderRadius:12, border:"1px solid #e5e7eb", padding:"14px 16px" }}>
+            <div style={{ fontSize:20 }}>{k.icon}</div>
+            <div style={{ fontSize:22, fontWeight:800, color:k.color, marginTop:4 }}>{k.value}</div>
+            <div style={{ fontSize:11, color:"#6b7280", fontWeight:600, marginTop:2 }}>{k.label}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Login sparkline */}
+      <div style={sectionStyle}>
+        <div style={hdr}>📈 Logins per Day</div>
+        <div style={{ display:"flex", alignItems:"flex-end", gap:3, height:60 }}>
+          {days.map(d => {
+            const count = loginsByDay[d] || 0;
+            const h = maxDay > 0 ? Math.max(3, (count / maxDay) * 56) : 3;
+            const isToday = d === new Date().toISOString().slice(0,10);
+            return (
+              <div key={d} title={`${d}: ${count} login${count!==1?"s":""}`}
+                style={{ flex:1, display:"flex", flexDirection:"column", alignItems:"center", gap:2 }}>
+                <div style={{ width:"100%", height:h, borderRadius:3, background: isToday?"#3b82f6":count>0?"#93c5fd":"#e5e7eb", transition:"height 0.2s" }} />
+                {range <= 14 && <div style={{ fontSize:8, color:"#9ca3af", transform:"rotate(-45deg)", transformOrigin:"top center", marginTop:2 }}>{d.slice(5)}</div>}
+              </div>
+            );
+          })}
+        </div>
+        {range > 14 && (
+          <div style={{ display:"flex", justifyContent:"space-between", marginTop:4, fontSize:10, color:"#9ca3af" }}>
+            <span>{days[0]}</span><span>Today</span>
+          </div>
+        )}
+      </div>
+
+      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:14 }}>
+        {/* Tab popularity */}
+        <div style={sectionStyle}>
+          <div style={hdr}>🗂 Page Views by Tab</div>
+          {sortedTabs.length === 0 ? (
+            <div style={{ color:"#9ca3af", fontSize:12 }}>No tab data yet</div>
+          ) : sortedTabs.map(([tab, count]) => (
+            <div key={tab} style={{ marginBottom:8 }}>
+              <div style={{ display:"flex", justifyContent:"space-between", fontSize:12, marginBottom:3 }}>
+                <span style={{ fontWeight:600, color:"#374151" }}>{TAB_LABELS[tab] || tab}</span>
+                <span style={{ color:"#6b7280" }}>{count} view{count!==1?"s":""}</span>
+              </div>
+              <div style={{ height:6, borderRadius:3, background:"#f1f5f9" }}>
+                <div style={{ height:"100%", borderRadius:3, background:"#3b82f6", width:`${(count/maxTabViews)*100}%`, transition:"width 0.3s" }} />
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {/* Time on tab */}
+        <div style={sectionStyle}>
+          <div style={hdr}>⏱ Avg Time per Tab</div>
+          {Object.keys(tabDurationCounts).length === 0 ? (
+            <div style={{ color:"#9ca3af", fontSize:12 }}>No duration data yet</div>
+          ) : Object.entries(tabDurations)
+              .map(([tab, total]) => [tab, total / tabDurationCounts[tab]])
+              .sort((a,b) => b[1]-a[1])
+              .map(([tab, avg]) => (
+            <div key={tab} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"6px 0", borderBottom:"1px solid #f3f4f6", fontSize:12 }}>
+              <span style={{ fontWeight:600, color:"#374151" }}>{TAB_LABELS[tab] || tab}</span>
+              <span style={{ fontWeight:700, color:"#1e3a5f" }}>{fmtDur(avg)}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Per-user table */}
+      <div style={sectionStyle}>
+        <div style={hdr}>👥 Activity by User</div>
+        <div style={{ overflowX:"auto" }}>
+          <table style={{ width:"100%", borderCollapse:"collapse", fontSize:12 }}>
+            <thead>
+              <tr style={{ borderBottom:"2px solid #e5e7eb" }}>
+                {["User", "Role", "Logins", "Page Views", "Most Visited Tab", "Avg Time / Tab", "Last Active"].map(h => (
+                  <th key={h} style={{ padding:"6px 10px", textAlign:"left", fontWeight:700, color:"#6b7280", fontSize:11, whiteSpace:"nowrap" }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {uniqueUsers.sort((a,b) => (loginsByUser[b]||0)-(loginsByUser[a]||0)).map(email => {
+                const userEvents = filtered.filter(e => e.user_email === email);
+                const userLogins = userEvents.filter(e => e.event_type === "login").length;
+                const userTabViews = userEvents.filter(e => e.event_type === "tab_view");
+                const userTabCounts = {};
+                userTabViews.forEach(e => { const t=e.payload?.tab||"?"; userTabCounts[t]=(userTabCounts[t]||0)+1; });
+                const topTab = Object.entries(userTabCounts).sort((a,b)=>b[1]-a[1])[0]?.[0];
+                const userExits = userEvents.filter(e => e.event_type === "tab_exit");
+                const validDurs = userExits.map(e=>Number(e.payload?.duration_seconds)||0).filter(d=>d>0&&d<7200);
+                const avgDur = validDurs.length > 0 ? validDurs.reduce((a,b)=>a+b,0)/validDurs.length : 0;
+                const role = userEvents.find(e=>e.payload?.role)?.payload?.role || "—";
+                return (
+                  <tr key={email} style={{ borderBottom:"1px solid #f3f4f6" }}>
+                    <td style={{ padding:"8px 10px", fontWeight:600, color:"#111827" }}>{email}</td>
+                    <td style={{ padding:"8px 10px" }}>
+                      <span style={{ fontSize:10, padding:"2px 7px", borderRadius:99, fontWeight:700,
+                        background:role==="admin"?"#fef3c7":role==="manager"?"#eff6ff":"#f3f4f6",
+                        color:role==="admin"?"#92400e":role==="manager"?"#1d4ed8":"#6b7280" }}>{role}</span>
+                    </td>
+                    <td style={{ padding:"8px 10px", fontWeight:700, color:"#1e3a5f" }}>{userLogins}</td>
+                    <td style={{ padding:"8px 10px", color:"#374151" }}>{userTabViews.length}</td>
+                    <td style={{ padding:"8px 10px", color:"#374151" }}>{topTab ? (TAB_LABELS[topTab]||topTab) : "—"}</td>
+                    <td style={{ padding:"8px 10px", color:"#374151" }}>{fmtDur(avgDur)}</td>
+                    <td style={{ padding:"8px 10px", color:"#6b7280", whiteSpace:"nowrap" }}>{fmtDate(lastSeenByUser[email])}</td>
+                  </tr>
+                );
+              })}
+              {uniqueUsers.length === 0 && (
+                <tr><td colSpan={7} style={{ padding:24, textAlign:"center", color:"#9ca3af" }}>No activity recorded in this period yet</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* Raw event log */}
+      <div style={sectionStyle}>
+        <div style={{ ...hdr, justifyContent:"space-between" }}>
+          <span>📋 Recent Events</span>
+          <span style={{ fontSize:11, fontWeight:400, color:"#9ca3af" }}>{filtered.length} events in last {range} days</span>
+        </div>
+        <div style={{ maxHeight:240, overflowY:"auto" }}>
+          <table style={{ width:"100%", borderCollapse:"collapse", fontSize:11 }}>
+            <thead style={{ position:"sticky", top:0, background:"#fff" }}>
+              <tr style={{ borderBottom:"1px solid #e5e7eb" }}>
+                {["Time", "User", "Event", "Detail"].map(h => (
+                  <th key={h} style={{ padding:"4px 8px", textAlign:"left", fontWeight:700, color:"#9ca3af", fontSize:10 }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.slice(0,200).map((e, i) => (
+                <tr key={i} style={{ borderBottom:"1px solid #f9fafb" }}>
+                  <td style={{ padding:"4px 8px", color:"#9ca3af", whiteSpace:"nowrap" }}>{fmtDate(e.created_at)}</td>
+                  <td style={{ padding:"4px 8px", fontWeight:600, color:"#374151" }}>{e.user_email}</td>
+                  <td style={{ padding:"4px 8px" }}>
+                    <span style={{ fontSize:10, padding:"1px 6px", borderRadius:99, fontWeight:700,
+                      background:e.event_type==="login"?"#fef9c3":e.event_type==="tab_view"?"#eff6ff":"#f0fdf4",
+                      color:e.event_type==="login"?"#92400e":e.event_type==="tab_view"?"#1d4ed8":"#15803d" }}>
+                      {e.event_type}
+                    </span>
+                  </td>
+                  <td style={{ padding:"4px 8px", color:"#6b7280" }}>
+                    {e.event_type==="login" && `role: ${e.payload?.role||"?"}`}
+                    {e.event_type==="tab_view" && `→ ${TAB_LABELS[e.payload?.tab]||e.payload?.tab||"?"}`}
+                    {e.event_type==="tab_exit" && `← ${TAB_LABELS[e.payload?.tab]||e.payload?.tab||"?"} · ${fmtDur(e.payload?.duration_seconds)}`}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* Setup instructions */}
+      <div style={{ background:"#fffbeb", borderRadius:12, border:"1px solid #fde68a", padding:"14px 16px" }}>
+        <div style={{ fontSize:12, fontWeight:700, color:"#92400e", marginBottom:6 }}>⚙️ Supabase Setup Required</div>
+        <div style={{ fontSize:11, color:"#78350f", marginBottom:8 }}>Run this SQL in your Supabase SQL editor to create the usage_events table:</div>
+        <pre style={{ fontSize:10, background:"#fff", padding:"10px 12px", borderRadius:8, border:"1px solid #fde68a", overflowX:"auto", color:"#374151", lineHeight:1.6 }}>{`create table if not exists usage_events (
+  id bigserial primary key,
+  user_id uuid,
+  user_email text,
+  event_type text,
+  payload jsonb,
+  created_at timestamptz default now()
+);
+-- Allow authenticated users to insert their own events
+alter table usage_events enable row level security;
+create policy "insert own events" on usage_events
+  for insert with check (auth.uid() = user_id);
+-- Allow all authenticated users to read (admin sees all)
+create policy "read all events" on usage_events
+  for select using (auth.role() = 'authenticated');`}</pre>
+      </div>
+    </div>
+  );
 }
