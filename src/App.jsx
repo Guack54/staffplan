@@ -2320,6 +2320,56 @@ function HolidayToggleBtn({ ds, isHoliday, setHoliday, setDailyStat, small }) {
 // ─── Week Grid ────────────────────────────────────────────────────────────────
 function WeekGrid({ filteredStaff, weekDates, getEntry, getDayFTE, nwMap, setEditingCell, setDrillDay, editingName, setEditingName, tempName, setTempName, updateStaff, staff, compactMode, getDayAlerts, dayNotes, updateDayNotes, alertSettings, getDailyStats, setDailyStat, setHoliday, todayStr, canEdit }) {
   const [confirmHolidayDs, setConfirmHolidayDs] = useState(null);
+  const [showHourAlerts, setShowHourAlerts] = useState(false);
+
+  const hourMismatches = useMemo(() => {
+    const result = [];
+    filteredStaff.forEach(s => {
+      const rawSched = s.defaultSchedule && s.defaultSchedule.length > 0
+        ? s.defaultSchedule
+        : weekDates.map((_, i) => ({ day: i, team: s.team, hours: i===0||i===6 ? 0 : 8 }));
+      const normSched = weekDates.map((date) => {
+        const dow = date.getDay();
+        const found = rawSched.find(d => Number(d.day) === dow);
+        return found ? Number(found.hours)||0 : 0;
+      });
+      const standardTotal = normSched.reduce((a, h) => a + h, 0);
+      if (standardTotal === 0) return;
+      let enteredTotal = 0;
+      const dayMismatches = [];
+      weekDates.forEach((date, i) => {
+        const ds = fmt(date);
+        const standardDayHrs = normSched[i];
+        const rawEntry = entries ? entries[s.id + "_" + ds] : null;
+        const hasRealEntry = rawEntry != null && (
+          Array.isArray(rawEntry)
+            ? rawEntry.some(e => Number(e.hours) > 0 || e.nonWork)
+            : (Number(rawEntry.hours) > 0 || rawEntry.nonWork)
+        );
+        const segs = getEntry(s.id, ds);
+        const dayEntered = segs.reduce((a, e) => {
+          if (e.nonWork) {
+            const nwh = Number(e.nonWorkHours);
+            const eh = Number(e.hours);
+            return a + (nwh > 0 ? nwh : eh > 0 ? eh : standardDayHrs > 0 ? standardDayHrs : 8);
+          }
+          return a + (Number(e.hours) || 0);
+        }, 0);
+        enteredTotal += dayEntered;
+        if (standardDayHrs > 0 && !hasRealEntry) {
+          dayMismatches.push({ date, ds, expected: standardDayHrs, entered: 0, type: "missing" });
+        } else if (standardDayHrs > 0 && hasRealEntry && Math.abs(dayEntered - standardDayHrs) >= 0.5) {
+          dayMismatches.push({ date, ds, expected: standardDayHrs, entered: dayEntered, type: dayEntered < standardDayHrs ? "under" : "over" });
+        }
+      });
+      const diff = enteredTotal - standardTotal;
+      if (Math.abs(diff) >= 0.5 || dayMismatches.some(d => d.type === "missing")) {
+        result.push({ s, standardTotal, enteredTotal, diff, dayMismatches });
+      }
+    });
+    return result.sort((a, b) => Math.abs(b.diff) - Math.abs(a.diff));
+  }, [filteredStaff, weekDates, getEntry]);
+
   return (
     <div style={{overflowX:"auto",overflowY:"auto",maxHeight:"calc(100vh - 220px)"}}>
       <table style={{width:"100%",borderCollapse:"separate",borderSpacing:0,minWidth:860}}>
