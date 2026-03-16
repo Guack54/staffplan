@@ -2343,36 +2343,22 @@ function WeekGrid({ filteredStaff, weekDates, getEntry, getDayFTE, nwMap, setEdi
         // Use getEntry to check if a real entry exists — avoids needing entries in scope
         const segsCheck = getEntry(s.id, ds);
         const hasRealEntry = segsCheck.some(e => Number(e.hours) > 0 || e.nonWork);
-        // Count all hours for the day: worked hours + non-work hours
-        // Strategy: sum work hours first, then infer non-work as remainder
-        // This avoids relying on nonWorkHours field which may be stale/wrong
-        const hasNonWork = segsCheck.some(e => e.nonWork);
-        let workedHrs = 0;
+        // A single segment can have BOTH hours (work) and nonWork (non-work code)
+        // e.g. { hours: 4, nonWork: "VAC", nonWorkHours: 4 } = 4h work + 4h vacation
+        // So we always count BOTH hours and nonWorkHours from every segment
+        let dayEntered = 0;
         segsCheck.forEach(e => {
-          if (!e.nonWork) workedHrs += Number(e.hours) || 0;
+          const workHrs = Number(e.hours) || 0;
+          const nwHrs = e.nonWork
+            ? (Number(e.nonWorkHours) > 0
+                ? Number(e.nonWorkHours)
+                : Math.max(0, standardDayHrs - workHrs))
+            : 0;
+          dayEntered += workHrs + nwHrs;
         });
-        let nonWorkHrs = 0;
-        if (hasNonWork) {
-          // If there are non-work segments, try reading nonWorkHours explicitly first
-          // But if the stored value + workedHrs would exceed standardDayHrs, it's stale
-          // In that case just use standardDayHrs - workedHrs as the non-work portion
-          let storedNW = 0;
-          segsCheck.forEach(e => {
-            if (e.nonWork) {
-              const nwh = Number(e.nonWorkHours);
-              const eh  = Number(e.hours);
-              storedNW += nwh > 0 ? nwh : eh > 0 ? eh : 0;
-            }
-          });
-          if (storedNW > 0 && workedHrs + storedNW <= standardDayHrs + 0.5) {
-            // Stored value is plausible - use it
-            nonWorkHrs = storedNW;
-          } else {
-            // Stored value is missing or inflated - infer from remainder
-            nonWorkHrs = Math.max(0, standardDayHrs - workedHrs);
-          }
-        }
-        const dayEntered = workedHrs + nonWorkHrs;
+        // Cap at standardDayHrs to avoid double-counting on full-day non-work entries
+        // where hours=0 and nonWorkHours=standardDayHrs (those should just equal standard)
+        dayEntered = Math.min(dayEntered, standardDayHrs > 0 ? standardDayHrs : dayEntered);
         enteredTotal += dayEntered;
         if (standardDayHrs > 0 && !hasRealEntry) {
           dayMismatches.push({ date, ds, expected: standardDayHrs, entered: 0, type: "missing" });
