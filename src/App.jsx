@@ -2340,14 +2340,10 @@ function WeekGrid({ filteredStaff, weekDates, getEntry, getDayFTE, nwMap, setEdi
       weekDates.forEach((date, i) => {
         const ds = fmt(date);
         const standardDayHrs = normSched[i];
-        const rawEntry = entries ? entries[s.id + "_" + ds] : null;
-        const hasRealEntry = rawEntry != null && (
-          Array.isArray(rawEntry)
-            ? rawEntry.some(e => Number(e.hours) > 0 || e.nonWork)
-            : (Number(rawEntry.hours) > 0 || rawEntry.nonWork)
-        );
-        const segs = getEntry(s.id, ds);
-        const dayEntered = segs.reduce((a, e) => {
+        // Use getEntry to check if a real entry exists — avoids needing entries in scope
+        const segsCheck = getEntry(s.id, ds);
+        const hasRealEntry = segsCheck.some(e => Number(e.hours) > 0 || e.nonWork);
+        const dayEntered = segsCheck.reduce((a, e) => {
           if (e.nonWork) {
             const nwh = Number(e.nonWorkHours);
             const eh = Number(e.hours);
