@@ -2381,8 +2381,16 @@ function WeekGrid({ filteredStaff, weekDates, getEntry, getDayFTE, nwMap, setEdi
         }
       });
       const diff = enteredTotal - standardTotal;
+      const debugDays = weekDates.map((date, i) => {
+        const segs = getEntry(s.id, fmt(date));
+        return {
+          day: date.toLocaleDateString("en-US",{weekday:"short"}),
+          std: normSched[i],
+          segs: segs.map(e => "hrs=" + e.hours + (e.nonWork ? " nw=" + e.nonWork + " nwh=" + e.nonWorkHours : "")),
+        };
+      });
       if (Math.abs(diff) >= 0.5 || dayMismatches.some(d => d.type === "missing")) {
-        result.push({ s, standardTotal, enteredTotal, diff, dayMismatches });
+        result.push({ s, standardTotal, enteredTotal, diff, dayMismatches, debugDays });
       }
     });
     return result.sort((a, b) => Math.abs(b.diff) - Math.abs(a.diff));
@@ -2446,8 +2454,11 @@ function WeekGrid({ filteredStaff, weekDates, getEntry, getDayFTE, nwMap, setEdi
                               ))}
                             </div>
                           )}
-                          <div style={{marginTop:4,fontSize:8,color:"#9ca3af"}}>
-                            {"Total entered: " + enteredTotal + "h (work + non-work) vs standard: " + standardTotal + "h"}
+                          <div style={{marginTop:4,fontSize:8,color:"#6b7280",fontFamily:"monospace",lineHeight:1.8,background:"#f9fafb",borderRadius:4,padding:"3px 6px"}}>
+                            <div>{"Entered: " + enteredTotal + "h / Standard: " + standardTotal + "h"}</div>
+                            {debugDays.filter(d=>d.std>0).map((d,i) => (
+                              <div key={i}>{d.day + "(std " + d.std + "h): " + (d.segs.length ? d.segs.join(" | ") : "no entry")}</div>
+                            ))}
                           </div>
                         </div>
                       );
