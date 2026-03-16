@@ -2419,11 +2419,15 @@ function WeekGrid({ filteredStaff, weekDates, getEntry, getDayFTE, nwMap, setEdi
                                   color:dm.type==="missing"?"#dc2626":"#d97706",
                                   border:"1px solid "+(dm.type==="missing"?"#fca5a5":"#fde68a")}}>
                                   {dm.date.toLocaleDateString("en-US",{weekday:"short"})}
-                                  {dm.type==="missing" ? " missing" : dm.type==="under" ? " " + dm.entered + "/" + dm.expected + "h" : " +" + (dm.entered-dm.expected) + "h"}
+                                  {dm.type==="missing" ? " missing" : " " + dm.entered + "h entered / " + dm.expected + "h expected"}
                                 </span>
                               ))}
                             </div>
                           )}
+                          {/* Debug: show raw segment data for this staff member */}
+                          <div style={{marginTop:4,fontSize:8,color:"#9ca3af"}}>
+                            {"Entered: " + enteredTotal + "h, Standard: " + standardTotal + "h, Diff: " + diff + "h"}
+                          </div>
                         </div>
                       );
                     })}
