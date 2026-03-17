@@ -4123,17 +4123,35 @@ function TimesheetTab({ staff, entries, weekStart, nonWorkTypes }) {
 
   // Aggregate hours per staff per team + non-work
   const rows = useMemo(() => {
-    const activeStaff = staff.filter(s=>!s.archived && (filterTeam==="All"||s.team===filterTeam));
-    return activeStaff.map(s => {
+    // Include ALL staff (active + archived) who have entries in the date range
+    // within their employment window (startDate → terminationDate)
+    const eligibleStaff = staff.filter(s => {
+      if (filterTeam !== "All" && s.team !== filterTeam) return false;
+      // For active staff, always include
+      if (!s.archived) return true;
+      // For archived staff, include only if they have entries in the range
+      // that fall within their employment window
+      return rangeDays.some(ds => {
+        if (s.startDate && ds < s.startDate) return false;
+        if (s.terminationDate && ds > s.terminationDate) return false;
+        const raw = entries[`${s.id}_${ds}`];
+        if (!raw) return false;
+        const segs = Array.isArray(raw) ? raw : [raw];
+        return segs.some(e => Number(e.hours) > 0 || e.nonWork);
+      });
+    });
+    return eligibleStaff.map(s => {
       const byTeam = {}; TEAMS.forEach(t=>{ byTeam[t]=0; });
       const byNW = {};
       let totalWork=0, totalNW=0;
       rangeDays.forEach(ds => {
+        // Only count days within employment window
+        if (s.startDate && ds < s.startDate) return;
+        if (s.terminationDate && ds > s.terminationDate) return;
         const raw = entries[`${s.id}_${ds}`];
         const segs = raw ? (Array.isArray(raw)?raw:[raw]) : [];
         segs.forEach(e => {
           const wh = Number(e.hours)||0;
-          // Use nonWorkHours if set, fall back to hours field, then default 8h — same logic as weekly metrics
           const nwh = e.nonWork ? (Number(e.nonWorkHours) || Number(e.hours) || 8) : 0;
           const team = e.team||s.team;
           if (wh>0) { byTeam[team]=(byTeam[team]||0)+wh; totalWork+=wh; }
@@ -4141,7 +4159,7 @@ function TimesheetTab({ staff, entries, weekStart, nonWorkTypes }) {
         });
       });
       return { s, byTeam, byNW, totalWork, totalNW, total:totalWork+totalNW };
-    });
+    }).filter(r => r.total > 0 || !r.s.archived); // hide archived staff with 0 hours in range
   }, [staff, entries, rangeDays, filterTeam]);
 
   const sorted = useMemo(() => {
@@ -4249,9 +4267,10 @@ function TimesheetTab({ staff, entries, weekStart, nonWorkTypes }) {
                   <tr key={s.id} style={{borderBottom:"1px solid #f3f4f6"}}
                     onMouseEnter={e=>e.currentTarget.style.background="#f9fafb"}
                     onMouseLeave={e=>e.currentTarget.style.background=""}>
-                    <td style={{padding:"8px 16px",fontWeight:700,color:"#111827",whiteSpace:"nowrap",position:"sticky",left:0,background:"inherit",zIndex:2}}>
+                    <td style={{padding:"8px 16px",fontWeight:700,color:s.archived?"#6b7280":"#111827",whiteSpace:"nowrap",position:"sticky",left:0,background:"inherit",zIndex:2}}>
                       <span style={{display:"inline-block",width:7,height:7,borderRadius:"50%",background:tc?.dot,marginRight:6}} />
                       {s.name}
+                      {s.archived && <span style={{marginLeft:5,fontSize:9,padding:"1px 5px",borderRadius:99,background:"#f3f4f6",color:"#9ca3af",fontWeight:700}}>archived</span>}
                     </td>
                     <td style={{padding:"8px 10px"}}>
                       <span style={{padding:"2px 7px",borderRadius:99,background:tc?.bg,color:tc?.text,fontSize:10,fontWeight:700}}>{s.team}</span>
