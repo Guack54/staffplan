@@ -757,12 +757,13 @@ export default function StaffingApp() {
     }
   }, [dailyStats, getDailyStats, updateDailyStats, entries, staff, updateEntries]);
 
+  // getDayFTE counts ALL non-archived staff entries for a date
+  // Used by visits metrics and reporting — not filtered by employment dates
+  // so historical data is always accurate
   const getDayFTE = useCallback((dateStr) => {
     let total = 0; const teamFTE = {}; TEAMS.forEach(t => teamFTE[t] = 0);
     staff.forEach(s => {
       if (s.archived) return;
-      if (s.startDate && dateStr < s.startDate) return;
-      if (s.terminationDate && dateStr > s.terminationDate) return;
       const segs = getEntry(s.id, dateStr);
       segs.forEach(e => {
         const hrs = Number(e.hours) || 0; const fte = hrs / 8;
