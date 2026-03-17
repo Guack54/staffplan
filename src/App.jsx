@@ -760,10 +760,11 @@ export default function StaffingApp() {
   // getDayFTE counts ALL non-archived staff entries for a date
   // Used by visits metrics and reporting — not filtered by employment dates
   // so historical data is always accurate
+  // getDayFTE counts entries for ALL staff (including archived) on a given date
+  // Archive status only affects scheduling views — past hours always count in metrics
   const getDayFTE = useCallback((dateStr) => {
     let total = 0; const teamFTE = {}; TEAMS.forEach(t => teamFTE[t] = 0);
     staff.forEach(s => {
-      if (s.archived) return;
       const segs = getEntry(s.id, dateStr);
       segs.forEach(e => {
         const hrs = Number(e.hours) || 0; const fte = hrs / 8;
