@@ -680,7 +680,17 @@ export default function StaffingApp() {
 
   const weekDates = useMemo(() => getWeekDates(weekStart), [weekStart]);
   const filteredStaff = useMemo(() => {
-    const active = staff.filter(s => !s.archived);
+    // Filter out archived staff, then filter by employment window for the current week
+    const weekDs = getWeekDates(weekStart).map(d => fmt(d));
+    const active = staff.filter(s => {
+      if (s.archived) return false;
+      // Show if active on ANY day of the current week
+      return weekDs.some(ds => {
+        if (s.startDate && ds < s.startDate) return false;
+        if (s.terminationDate && ds > s.terminationDate) return false;
+        return true;
+      });
+    });
     if (filterTeam === "All") return sortByName(active);
     return sortByName(active.filter(s => {
       if (s.team === filterTeam) return true;
@@ -692,6 +702,14 @@ export default function StaffingApp() {
     }));
   }, [staff, filterTeam, entries, weekStart]);
   const nwMap = useMemo(() => Object.fromEntries(nonWorkTypes.map(n => [n.code, n])), [nonWorkTypes]);
+
+  // Returns true if staff member is active on a given date string
+  // Respects startDate and terminationDate if set; if not set, always active
+  const isStaffActiveOn = useCallback((s, dateStr) => {
+    if (s.startDate && dateStr < s.startDate) return false;
+    if (s.terminationDate && dateStr > s.terminationDate) return false;
+    return true;
+  }, []);
 
   // Returns array of segments: [{hours, team, nonWork, nonWorkHours}, ...]
   const getEntry = useCallback((staffId, dateStr) => {
@@ -742,6 +760,9 @@ export default function StaffingApp() {
   const getDayFTE = useCallback((dateStr) => {
     let total = 0; const teamFTE = {}; TEAMS.forEach(t => teamFTE[t] = 0);
     staff.forEach(s => {
+      if (s.archived) return;
+      if (s.startDate && dateStr < s.startDate) return;
+      if (s.terminationDate && dateStr > s.terminationDate) return;
       const segs = getEntry(s.id, dateStr);
       segs.forEach(e => {
         const hrs = Number(e.hours) || 0; const fte = hrs / 8;
@@ -1395,11 +1416,17 @@ function DayView({ date, staff, getEntry, setEntrySegments, getDailyStats, setDa
   };
 
   // Only staff with actual worked hours appear on the timeline
-  const staffOnDuty = filtered.map(s => ({ s, info: getStaffHours(s) })).filter(x => x.info && !x.info.nonWorkOnly);
+  // Filter by employment window for this specific day
+  const activeFiltered = filtered.filter(s => {
+    if (s.startDate && ds < s.startDate) return false;
+    if (s.terminationDate && ds > s.terminationDate) return false;
+    return true;
+  });
+  const staffOnDuty = activeFiltered.map(s => ({ s, info: getStaffHours(s) })).filter(x => x.info && !x.info.nonWorkOnly);
   // Staff with non-work codes but no worked hours
-  const staffOut = filtered.map(s => ({ s, info: getStaffHours(s) })).filter(x => x.info && x.info.nonWorkOnly);
+  const staffOut = activeFiltered.map(s => ({ s, info: getStaffHours(s) })).filter(x => x.info && x.info.nonWorkOnly);
   // Staff with no entry at all
-  const notScheduled = filtered.filter(s => !getStaffHours(s));
+  const notScheduled = activeFiltered.filter(s => !getStaffHours(s));
 
   return (
     <div style={{ display: "grid", gap: 14 }}>
@@ -4499,6 +4526,28 @@ function StaffTab({ staff, updateStaff, entries, updateEntries, weekStart, nonWo
                   ) : (
                     <button onClick={()=>archiveStaff(s.id)} title="Archive — hides from scheduling but keeps all history"
                       style={{background:"#f3f4f6",border:"1px solid #e5e7eb",borderRadius:6,color:"#6b7280",fontWeight:700,cursor:"pointer",padding:"3px 9px",fontSize:11,whiteSpace:"nowrap"}}>📦 Archive</button>
+                  )}
+                </div>
+                {/* Employment dates */}
+                <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap",marginTop:4}}>
+                  <div style={{display:"flex",alignItems:"center",gap:4}}>
+                    <span style={{fontSize:10,color:"#9ca3af",fontWeight:600,whiteSpace:"nowrap"}}>Start</span>
+                    <input type="date" value={s.startDate||""} onChange={e=>update(s.id,"startDate",e.target.value||null)}
+                      style={{fontSize:11,padding:"2px 5px",borderRadius:5,border:"1px solid #e5e7eb",color:"#374151"}} />
+                    {s.startDate && <button onClick={()=>update(s.id,"startDate",null)}
+                      style={{fontSize:10,color:"#9ca3af",background:"none",border:"none",cursor:"pointer",padding:"0 2px"}}>✕</button>}
+                  </div>
+                  <div style={{display:"flex",alignItems:"center",gap:4}}>
+                    <span style={{fontSize:10,color:"#9ca3af",fontWeight:600,whiteSpace:"nowrap"}}>End</span>
+                    <input type="date" value={s.terminationDate||""} onChange={e=>update(s.id,"terminationDate",e.target.value||null)}
+                      style={{fontSize:11,padding:"2px 5px",borderRadius:5,border:"1px solid "+(s.terminationDate?"#fca5a5":"#e5e7eb"),color:s.terminationDate?"#dc2626":"#374151"}} />
+                    {s.terminationDate && <button onClick={()=>update(s.id,"terminationDate",null)}
+                      style={{fontSize:10,color:"#9ca3af",background:"none",border:"none",cursor:"pointer",padding:"0 2px"}}>✕</button>}
+                  </div>
+                  {s.terminationDate && (
+                    <span style={{fontSize:10,padding:"1px 7px",borderRadius:99,background:"#fef2f2",color:"#dc2626",fontWeight:700,border:"1px solid #fca5a5"}}>
+                      {"Ends " + new Date(s.terminationDate+"T12:00:00").toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"})}
+                    </span>
                   )}
                 </div>
               </div>
