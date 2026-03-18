@@ -2347,6 +2347,57 @@ function HolidayToggleBtn({ ds, isHoliday, setHoliday, setDailyStat, small }) {
   );
 }
 
+
+// ─── Mismatch Row (needs useState so must be its own component) ──────────────
+function MismatchRow({ item }) {
+  const { s, standardTotal, enteredTotal, diff, dayMismatches, debugDays } = item;
+  const [expanded, setExpanded] = useState(false);
+  const tc = TEAM_COLORS[s.team];
+  const isUnder = diff < 0;
+  const isOver = diff > 0;
+  return (
+    <div style={{borderRadius:7,
+      background:isUnder?"#fef2f2":isOver?"#fffbeb":"#f9fafb",
+      border:"1px solid "+(isUnder?"#fca5a5":isOver?"#fde68a":"#e5e7eb")}}>
+      <div onClick={()=>setExpanded(v=>!v)} style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"6px 8px",cursor:"pointer"}}>
+        <div style={{display:"flex",alignItems:"center",gap:5}}>
+          <span style={{width:6,height:6,borderRadius:"50%",background:tc?.dot,display:"inline-block",flexShrink:0}}/>
+          <span style={{fontSize:11,fontWeight:700,color:"#111827"}}>{s.name}</span>
+        </div>
+        <div style={{display:"flex",alignItems:"center",gap:6}}>
+          <span style={{fontSize:11,fontWeight:800,color:isUnder?"#dc2626":isOver?"#d97706":"#374151"}}>
+            {enteredTotal}h / {standardTotal}h
+            {isUnder ? " (-" + Math.abs(diff) + "h)" : isOver ? " (+" + diff + "h)" : ""}
+          </span>
+          <span style={{fontSize:9,color:"#9ca3af"}}>{expanded?"▲":"▼"}</span>
+        </div>
+      </div>
+      {expanded && (
+        <div style={{padding:"0 8px 8px"}}>
+          {dayMismatches.length > 0 && (
+            <div style={{display:"flex",gap:3,flexWrap:"wrap",marginBottom:5}}>
+              {dayMismatches.map(dm => (
+                <span key={dm.ds} style={{fontSize:9,padding:"1px 5px",borderRadius:99,fontWeight:700,
+                  background:dm.type==="missing"?"#fef2f2":"#fffbeb",
+                  color:dm.type==="missing"?"#dc2626":"#d97706",
+                  border:"1px solid "+(dm.type==="missing"?"#fca5a5":"#fde68a")}}>
+                  {dm.date.toLocaleDateString("en-US",{weekday:"short"})}
+                  {dm.type==="missing" ? " missing" : " " + dm.entered + "h / " + dm.expected + "h"}
+                </span>
+              ))}
+            </div>
+          )}
+          <div style={{fontSize:8,color:"#6b7280",fontFamily:"monospace",lineHeight:1.8,background:"#f9fafb",borderRadius:4,padding:"3px 6px"}}>
+            {debugDays && debugDays.filter(d=>d.std>0).map((d,i) => (
+              <div key={i}>{d.day + "(std " + d.std + "h): " + (d.segs.length ? d.segs.join(" | ") : "no entry")}</div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Week Grid ────────────────────────────────────────────────────────────────
 function WeekGrid({ filteredStaff, weekDates, getEntry, getDayFTE, nwMap, setEditingCell, setDrillDay, editingName, setEditingName, tempName, setTempName, updateStaff, staff, compactMode, getDayAlerts, dayNotes, updateDayNotes, alertSettings, getDailyStats, setDailyStat, setHoliday, todayStr, canEdit }) {
   const [confirmHolidayDs, setConfirmHolidayDs] = useState(null);
@@ -2439,55 +2490,9 @@ function WeekGrid({ filteredStaff, weekDates, getEntry, getDayFTE, nwMap, setEdi
                   boxShadow:"0 8px 24px rgba(0,0,0,0.15)",padding:"10px 12px",marginTop:2}}>
                   <div style={{fontSize:11,fontWeight:800,color:"#dc2626",marginBottom:8}}>Hour Mismatches This Week</div>
                   <div style={{maxHeight:240,overflowY:"auto",display:"flex",flexDirection:"column",gap:6}}>
-                    {hourMismatches.map(({s, standardTotal, enteredTotal, diff, dayMismatches, debugDays}) => {
-                      const tc = TEAM_COLORS[s.team];
-                      const isUnder = diff < 0;
-                      const isOver = diff > 0;
-                      const [expanded, setExpanded] = React.useState(false);
-                      return (
-                        <div key={s.id} style={{borderRadius:7,
-                          background:isUnder?"#fef2f2":isOver?"#fffbeb":"#f9fafb",
-                          border:"1px solid "+(isUnder?"#fca5a5":isOver?"#fde68a":"#e5e7eb")}}>
-                          {/* Summary row — always visible, click to expand */}
-                          <div onClick={()=>setExpanded(v=>!v)} style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"6px 8px",cursor:"pointer"}}>
-                            <div style={{display:"flex",alignItems:"center",gap:5}}>
-                              <span style={{width:6,height:6,borderRadius:"50%",background:tc?.dot,display:"inline-block",flexShrink:0}}/>
-                              <span style={{fontSize:11,fontWeight:700,color:"#111827"}}>{s.name}</span>
-                            </div>
-                            <div style={{display:"flex",alignItems:"center",gap:6}}>
-                              <span style={{fontSize:11,fontWeight:800,color:isUnder?"#dc2626":isOver?"#d97706":"#374151"}}>
-                                {enteredTotal}h / {standardTotal}h
-                                {isUnder ? " (-" + Math.abs(diff) + "h)" : isOver ? " (+" + diff + "h)" : ""}
-                              </span>
-                              <span style={{fontSize:9,color:"#9ca3af"}}>{expanded?"▲":"▼"}</span>
-                            </div>
-                          </div>
-                          {/* Collapsible detail */}
-                          {expanded && (
-                            <div style={{padding:"0 8px 8px"}}>
-                              {dayMismatches.length > 0 && (
-                                <div style={{display:"flex",gap:3,flexWrap:"wrap",marginBottom:5}}>
-                                  {dayMismatches.map(dm => (
-                                    <span key={dm.ds} style={{fontSize:9,padding:"1px 5px",borderRadius:99,fontWeight:700,
-                                      background:dm.type==="missing"?"#fef2f2":"#fffbeb",
-                                      color:dm.type==="missing"?"#dc2626":"#d97706",
-                                      border:"1px solid "+(dm.type==="missing"?"#fca5a5":"#fde68a")}}>
-                                      {dm.date.toLocaleDateString("en-US",{weekday:"short"})}
-                                      {dm.type==="missing" ? " missing" : " " + dm.entered + "h / " + dm.expected + "h"}
-                                    </span>
-                                  ))}
-                                </div>
-                              )}
-                              <div style={{fontSize:8,color:"#6b7280",fontFamily:"monospace",lineHeight:1.8,background:"#f9fafb",borderRadius:4,padding:"3px 6px"}}>
-                                {debugDays.filter(d=>d.std>0).map((d,i) => (
-                                  <div key={i}>{d.day + "(std " + d.std + "h): " + (d.segs.length ? d.segs.join(" | ") : "no entry")}</div>
-                                ))}
-                              </div>
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })}
+                    {hourMismatches.map((m) => (
+                      <MismatchRow key={m.s.id} item={m} />
+                    ))}
                   </div>
                   <div style={{marginTop:8,fontSize:9,color:"#9ca3af"}}>Compares entered hours + non-work codes vs standard schedule</div>
                 </div>
@@ -2737,36 +2742,33 @@ function YearView({ year, staff, getEntry, getDayFTE, nwMap, setWeekStart, setAc
               <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:2}}>
                 {Array.from({length:firstDay},(_,i)=><div key={"pad"+i} />)}
                 {days.map(date => {
-                  const ds = fmt(date); const isToday = ds===today;
+                  const ds = fmt(date);
+                  const isToday = ds === today;
                   const fte = getDayFTE(ds);
+                  const alerts = getDayAlerts ? getDayAlerts(ds) : [];
+                  const alertColor = alerts.length ? (alerts[0].severity==="red" ? "#ef4444" : "#f59e0b") : null;
                   return (
-                    {(() => {
-                      const alerts = getDayAlerts ? getDayAlerts(ds) : [];
-                      const alertColor = alerts.length ? (alerts[0].severity==="red" ? "#ef4444" : "#f59e0b") : null;
-                      return (
-                        <div key={ds}
-                          onMouseEnter={()=>setHovered({date,ds,fte,alerts})}
-                          onMouseLeave={()=>setHovered(null)}
-                          onClick={()=>{
-                            if(date.getDay()===0){setWeekStart(new Date(date));setActiveTab("grid");}
-                            else {setDrillDay(date);}
-                          }}
-                          style={{
-                            aspectRatio:"1",borderRadius:3,cursor:"pointer",
-                            background:getDayColor(date),
-                            border:isToday?"2px solid #1e3a5f":alertColor?"2px solid "+alertColor:"1px solid transparent",
-                            display:"flex",alignItems:"center",justifyContent:"center",position:"relative",
-                            fontSize:8,fontWeight:isToday?800:500,color:isToday?"#1e3a5f":"#6b7280",
-                            transition:"transform 0.1s",transform:hovered?.ds===ds?"scale(1.2)":"scale(1)"
-                          }}
-                        >
-                          {date.getDate()}
-                          {alertColor && (
-                            <div style={{position:"absolute",top:0,right:0,width:4,height:4,borderRadius:"50%",background:alertColor}} />
-                          )}
-                        </div>
-                      );
-                    })()}
+                    <div key={ds}
+                      onMouseEnter={()=>setHovered({date,ds,fte,alerts})}
+                      onMouseLeave={()=>setHovered(null)}
+                      onClick={()=>{
+                        if(date.getDay()===0){setWeekStart(new Date(date));setActiveTab("grid");}
+                        else {setDrillDay(date);}
+                      }}
+                      style={{
+                        aspectRatio:"1",borderRadius:3,cursor:"pointer",
+                        background:getDayColor(date),
+                        border:isToday?"2px solid #1e3a5f":alertColor?"2px solid "+alertColor:"1px solid transparent",
+                        display:"flex",alignItems:"center",justifyContent:"center",position:"relative",
+                        fontSize:8,fontWeight:isToday?800:500,color:isToday?"#1e3a5f":"#6b7280",
+                        transition:"transform 0.1s",transform:hovered?.ds===ds?"scale(1.2)":"scale(1)"
+                      }}
+                    >
+                      {date.getDate()}
+                      {alertColor && (
+                        <div style={{position:"absolute",top:0,right:0,width:4,height:4,borderRadius:"50%",background:alertColor}} />
+                      )}
+                    </div>
                   );
                 })}
               </div>
