@@ -198,6 +198,25 @@ async function trackEvent(userId, userEmail, eventType, payload = {}) {
   } catch (_) { /* best-effort — never throw */ }
 }
 
+async function sbLoadCompetencies() {
+  try {
+    const sb = await getSB();
+    const { data } = await sb.from("alert_settings").select("data").eq("key", "competencies").single();
+    if (data?.data) return data.data;
+    return [];
+  } catch(_) { return []; }
+}
+
+async function sbSaveCompetencies(comps) {
+  try {
+    const sb = await getSB();
+    await sb.from("alert_settings").upsert(
+      { key: "competencies", data: comps },
+      { onConflict: "key" }
+    );
+  } catch(_) {}
+}
+
 async function sbLoadUsageEvents() {
   try {
     const sb = await getSB();
@@ -590,9 +609,9 @@ export default function StaffingApp() {
         if (sbNW)      setNonWorkTypes(sbNW);
         if (sbAlerts)  setAlertSettings(sbAlerts);
         const savedLocs = await loadFromStorage("staffplan:locations", DEFAULT_LOCATIONS);
-        const savedComps = await loadFromStorage("staffplan:competencies", []);
+        const savedComps = await sbLoadCompetencies();
         if (savedLocs) setLocations(savedLocs);
-        if (savedComps) setCompetencies(savedComps);
+        if (savedComps && savedComps.length > 0) setCompetencies(savedComps);
         if (sbPTO)     setPtoBalances(sbPTO);
         if (sbNotes)   setDayNotes(sbNotes);
         if (sbVisits)  setVisitData(sbVisits);
@@ -673,7 +692,7 @@ export default function StaffingApp() {
   const updateDailyStats = useCallback((val) => { pushHistory(staff, entries, dailyStats); setDailyStats(val); triggerSave(staff, entries, val, nonWorkTypes, alertSettings, ptoBalances, dayNotes); }, [staff, entries, dailyStats, nonWorkTypes, alertSettings, ptoBalances, dayNotes, triggerSave, pushHistory]);
   const updateNonWorkTypes = useCallback((val) => { setNonWorkTypes(val); triggerSave(staff, entries, dailyStats, val, alertSettings, ptoBalances, dayNotes); }, [staff, entries, dailyStats, alertSettings, ptoBalances, dayNotes, triggerSave]);
   const updateLocations = useCallback((val) => { setLocations(val); saveToStorage("staffplan:locations", val); }, []);
-  const updateCompetencies = useCallback((val) => { setCompetencies(val); saveToStorage("staffplan:competencies", val); }, []);
+  const updateCompetencies = useCallback((val) => { setCompetencies(val); sbSaveCompetencies(val); }, []);
   const updateAlertSettings = useCallback((val) => { setAlertSettings(val); triggerSave(staff, entries, dailyStats, nonWorkTypes, val, ptoBalances, dayNotes); }, [staff, entries, dailyStats, nonWorkTypes, ptoBalances, dayNotes, triggerSave]);
   const updatePtoBalances = useCallback((val) => { setPtoBalances(val); triggerSave(staff, entries, dailyStats, nonWorkTypes, alertSettings, val, dayNotes); }, [staff, entries, dailyStats, nonWorkTypes, alertSettings, dayNotes, triggerSave]);
   const updateDayNotes = useCallback((val) => { setDayNotes(val); triggerSave(staff, entries, dailyStats, nonWorkTypes, alertSettings, ptoBalances, val); }, [staff, entries, dailyStats, nonWorkTypes, alertSettings, ptoBalances, triggerSave]);
