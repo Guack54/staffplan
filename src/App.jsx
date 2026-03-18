@@ -2543,13 +2543,13 @@ function WeekGrid({ filteredStaff, weekDates, getEntry, getDayFTE, nwMap, setEdi
               <td style={{...tdS,fontWeight:600,fontSize:12,background:"#fff",position:"sticky",left:0,zIndex:5,borderBottom:"1px solid #f1f5f9",boxShadow:"2px 0 6px rgba(0,0,0,0.04)",paddingLeft:8,paddingRight:6}}>
                 <div style={{display:"flex",alignItems:"center",gap:6}}>
                   <div style={{width:7,height:7,borderRadius:"50%",background:TEAM_COLORS[s.team]?.dot,flexShrink:0}} />
-                  {editingName===s.id ? (
+                  {editingName===s.id && canEdit ? (
                     <input autoFocus value={tempName} onChange={e=>setTempName(e.target.value)}
                       onBlur={()=>{updateStaff(staff.map(x=>x.id===s.id?{...x,name:tempName||x.name}:x));setEditingName(null);}}
                       onKeyDown={e=>{if(e.key==="Enter"){updateStaff(staff.map(x=>x.id===s.id?{...x,name:tempName||x.name}:x));setEditingName(null);}}}
                       style={{fontSize:12,fontWeight:600,border:"1px solid #3b82f6",borderRadius:4,padding:"2px 5px",width:100}} />
                   ) : (
-                    <span style={{cursor:"pointer",color:"#111827"}} onDoubleClick={()=>{setEditingName(s.id);setTempName(s.name);}} title="Double-click to rename">{s.name}</span>
+                    <span style={{color:"#111827",cursor:canEdit?"pointer":"default"}} onDoubleClick={()=>{if(canEdit){setEditingName(s.id);setTempName(s.name);}}} title={canEdit?"Double-click to rename":""}>{s.name}</span>
                   )}
                 </div>
                 <div style={{fontSize:10,color:TEAM_COLORS[s.team]?.text,marginLeft:13}}>{s.team}</div>
