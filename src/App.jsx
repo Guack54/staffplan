@@ -690,15 +690,18 @@ export default function StaffingApp() {
     const weekDs = getWeekDates(weekStart).map(d => fmt(d));
     const active = staff.filter(s => {
       if (s.archived) return false;
-      // Show if active on ANY day of the current week
       return weekDs.some(ds => {
         if (s.startDate && ds < s.startDate) return false;
         if (s.terminationDate && ds > s.terminationDate) return false;
         return true;
       });
     });
-    if (filterTeam === "All") return sortByName(active);
-    return sortByName(active.filter(s => {
+    // Apply competency filter first — AND logic (must have ALL selected)
+    const compFiltered = filterCompetencies.length === 0 ? active : active.filter(s =>
+      filterCompetencies.every(cid => (s.competencies || []).includes(cid))
+    );
+    if (filterTeam === "All") return sortByName(compFiltered);
+    return sortByName(compFiltered.filter(s => {
       if (s.team === filterTeam) return true;
       return getWeekDates(weekStart).some(date => {
         const segs = (entries[`${s.id}_${fmt(date)}`] || []);
@@ -706,7 +709,7 @@ export default function StaffingApp() {
         return arr.some(e => (e.team || s.team) === filterTeam && Number(e.hours) > 0);
       });
     }));
-  }, [staff, filterTeam, entries, weekStart]);
+  }, [staff, filterTeam, filterCompetencies, entries, weekStart]);
   const nwMap = useMemo(() => Object.fromEntries(nonWorkTypes.map(n => [n.code, n])), [nonWorkTypes]);
 
   // Returns true if staff member is active on a given date string
@@ -1222,26 +1225,11 @@ export default function StaffingApp() {
               }}>{t}</button>
             ))}
             {competencies.length > 0 && (
-              <div style={{width:1,height:18,background:"#e5e7eb",margin:"0 4px"}} />
-            )}
-            {competencies.map(c => {
-              const active = filterCompetencies.includes(c.id);
-              return (
-                <button key={c.id} onClick={()=>setFilterCompetencies(prev =>
-                  active ? prev.filter(x=>x!==c.id) : [...prev, c.id]
-                )} style={{
-                  padding:"3px 10px",borderRadius:99,fontSize:11,fontWeight:600,cursor:"pointer",
-                  background:active?c.color:"#f9fafb",
-                  color:active?"#fff":"#6b7280",
-                  border:"1px solid "+(active?c.color:"#e5e7eb")
-                }}>🎯 {c.name}</button>
-              );
-            })}
-            {filterCompetencies.length > 0 && (
-              <button onClick={()=>setFilterCompetencies([])} style={{
-                padding:"3px 8px",borderRadius:99,fontSize:10,fontWeight:700,cursor:"pointer",
-                background:"#f3f4f6",color:"#6b7280",border:"1px solid #e5e7eb"
-              }}>✕ Clear</button>
+              <CompetencyFilterDropdown
+                competencies={competencies}
+                filterCompetencies={filterCompetencies}
+                setFilterCompetencies={setFilterCompetencies}
+              />
             )}
           </div>
         </>}
@@ -1994,6 +1982,70 @@ function PasswordManager({ currentUser, onClose }) {
 }
 
 
+
+
+// ─── Competency Filter Dropdown ───────────────────────────────────────────────
+function CompetencyFilterDropdown({ competencies, filterCompetencies, setFilterCompetencies }) {
+  const [open, setOpen] = useState(false);
+  const ref = React.useRef(null);
+
+  // Close on outside click
+  useEffect(() => {
+    const handler = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, []);
+
+  return (
+    <div ref={ref} style={{position:"relative"}}>
+      <button onClick={()=>setOpen(v=>!v)} style={{
+        padding:"3px 10px",borderRadius:99,fontSize:11,fontWeight:600,cursor:"pointer",
+        background:filterCompetencies.length>0?"#1e3a5f":"#f9fafb",
+        color:filterCompetencies.length>0?"#fff":"#6b7280",
+        border:"1px solid "+(filterCompetencies.length>0?"#1e3a5f":"#e5e7eb"),
+        display:"flex",alignItems:"center",gap:5
+      }}>
+        {"🎯 " + (filterCompetencies.length > 0 ? "Competency ("+filterCompetencies.length+")" : "Competency ▼")}
+      </button>
+      {open && (
+        <div style={{position:"absolute",top:"calc(100% + 6px)",right:0,zIndex:200,
+          background:"#fff",borderRadius:12,border:"1px solid #e5e7eb",
+          boxShadow:"0 8px 24px rgba(0,0,0,0.12)",padding:"10px 12px",minWidth:190}}>
+          <div style={{fontSize:10,fontWeight:700,color:"#9ca3af",marginBottom:8,textTransform:"uppercase",letterSpacing:"0.05em"}}>
+            Filter by Competency
+          </div>
+          <div style={{display:"flex",flexDirection:"column",gap:5}}>
+            {competencies.map(c => {
+              const active = filterCompetencies.includes(c.id);
+              return (
+                <button key={c.id} onClick={()=>setFilterCompetencies(prev =>
+                  active ? prev.filter(x=>x!==c.id) : [...prev, c.id]
+                )} style={{
+                  display:"flex",alignItems:"center",gap:8,padding:"5px 8px",
+                  borderRadius:8,border:"1px solid "+(active?c.color+"66":"#f3f4f6"),
+                  background:active?c.color+"15":"#f9fafb",
+                  cursor:"pointer",textAlign:"left"
+                }}>
+                  <span style={{width:10,height:10,borderRadius:"50%",background:c.color,flexShrink:0,
+                    outline:active?"2px solid "+c.color:"none",outlineOffset:"1px"}} />
+                  <span style={{fontSize:12,fontWeight:active?700:500,color:active?c.color:"#374151",flex:1}}>{c.name}</span>
+                  {active && <span style={{fontSize:10,color:c.color}}>✓</span>}
+                </button>
+              );
+            })}
+          </div>
+          {filterCompetencies.length > 0 && (
+            <button onClick={()=>{setFilterCompetencies([]);setOpen(false);}} style={{
+              marginTop:8,width:"100%",padding:"5px",borderRadius:7,
+              background:"#f3f4f6",border:"none",fontSize:11,fontWeight:600,
+              color:"#6b7280",cursor:"pointer"
+            }}>✕ Clear all</button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
 
 // ─── Competency Editor ────────────────────────────────────────────────────────
 function CompetencyEditor({ competencies, updateCompetencies, onClose }) {
