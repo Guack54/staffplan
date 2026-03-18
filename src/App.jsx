@@ -1011,8 +1011,7 @@ export default function StaffingApp() {
     { id:"master",    icon:"📋", label:"Master"     },
     { id:"month",     icon:"🗓", label:"Month"      },
     { id:"year",      icon:"📆", label:"Year"       },
-    { id:"summary",   icon:"📊", label:"Dept Stats" },
-    { id:"visits",    icon:"📈", label:"Visits"     },
+    { id:"summary",   icon:"📊", label:"Dept Stats & Visits" },
     { id:"timesheet", icon:"🕐", label:"Timesheets" },
     { id:"analytics", icon:"🔍", label:"Analytics", adminOnly: true },
   ];
@@ -1271,16 +1270,18 @@ export default function StaffingApp() {
         )}
         {activeTab==="year" && (
           <YearView year={yearView} staff={staff} getEntry={getEntry} getDayFTE={getDayFTE} nwMap={nwMap}
-            setWeekStart={setWeekStart} setActiveTab={setActiveTab} setDrillDay={setDrillDay} />
+            setWeekStart={setWeekStart} setActiveTab={setActiveTab} setDrillDay={setDrillDay} getDayAlerts={getDayAlerts} />
         )}
         {activeTab==="master" && (
           <MasterScheduleView staff={staff} filterTeam={filterTeam} />
         )}
         {activeTab==="summary" && (
-          <SummaryTab weekDates={weekDates} getEntry={getEntry} getDailyStats={getDailyStats} getDayFTE={getDayFTE} weeklyMetrics={weeklyMetrics} nonWorkTypes={nonWorkTypes} staff={staff} dailyStats={dailyStats} yearView={yearView} ptoAlerts={ptoAlerts} entries={entries} />
-        )}
-        {activeTab==="visits" && (
-          <VisitsTab visitData={visitData} updateVisitData={updateVisitData} staff={staff} weekStart={weekStart} getDayFTE={getDayFTE} />
+          <div style={{display:"flex",flexDirection:"column",gap:16}}>
+            <SummaryTab weekDates={weekDates} getEntry={getEntry} getDailyStats={getDailyStats} getDayFTE={getDayFTE} weeklyMetrics={weeklyMetrics} nonWorkTypes={nonWorkTypes} staff={staff} dailyStats={dailyStats} yearView={yearView} ptoAlerts={ptoAlerts} entries={entries} />
+            <div style={{borderTop:"2px solid #e5e7eb",paddingTop:16}}>
+              <VisitsTab visitData={visitData} updateVisitData={updateVisitData} staff={staff} weekStart={weekStart} getDayFTE={getDayFTE} />
+            </div>
+          </div>
         )}
         {activeTab==="timesheet" && (
           <TimesheetTab staff={staff} entries={entries} weekStart={weekStart} nonWorkTypes={nonWorkTypes} />
@@ -1810,7 +1811,7 @@ function MonthView({ year, month, staff, getEntry, getDayFTE, nwMap, setDrillDay
                 onMouseLeave={() => setHovered(null)}
                 style={{
                   minHeight: 110, padding: "8px 10px", cursor: "pointer",
-                  background: isHov ? "#f0f9ff" : isToday ? "#fefce8" : we ? "#faf5ff" : getFTEColor(data.fte.total),
+                  background: isHov ? "#f0f9ff" : isToday ? "#fef08a" : we ? "#faf5ff" : getFTEColor(data.fte.total),
                   borderLeft: di > 0 ? "1px solid #f3f4f6" : "none",
                   transition: "background 0.1s",
                   position: "relative"
@@ -2442,39 +2443,48 @@ function WeekGrid({ filteredStaff, weekDates, getEntry, getDayFTE, nwMap, setEdi
                       const tc = TEAM_COLORS[s.team];
                       const isUnder = diff < 0;
                       const isOver = diff > 0;
+                      const [expanded, setExpanded] = React.useState(false);
                       return (
-                        <div key={s.id} style={{padding:"6px 8px",borderRadius:7,
+                        <div key={s.id} style={{borderRadius:7,
                           background:isUnder?"#fef2f2":isOver?"#fffbeb":"#f9fafb",
                           border:"1px solid "+(isUnder?"#fca5a5":isOver?"#fde68a":"#e5e7eb")}}>
-                          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:3}}>
+                          {/* Summary row — always visible, click to expand */}
+                          <div onClick={()=>setExpanded(v=>!v)} style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"6px 8px",cursor:"pointer"}}>
                             <div style={{display:"flex",alignItems:"center",gap:5}}>
                               <span style={{width:6,height:6,borderRadius:"50%",background:tc?.dot,display:"inline-block",flexShrink:0}}/>
                               <span style={{fontSize:11,fontWeight:700,color:"#111827"}}>{s.name}</span>
                             </div>
-                            <span style={{fontSize:11,fontWeight:800,color:isUnder?"#dc2626":isOver?"#d97706":"#374151"}}>
-                              {enteredTotal}h / {standardTotal}h
-                              {isUnder ? " (-" + Math.abs(diff) + "h)" : isOver ? " (+" + diff + "h)" : ""}
-                            </span>
+                            <div style={{display:"flex",alignItems:"center",gap:6}}>
+                              <span style={{fontSize:11,fontWeight:800,color:isUnder?"#dc2626":isOver?"#d97706":"#374151"}}>
+                                {enteredTotal}h / {standardTotal}h
+                                {isUnder ? " (-" + Math.abs(diff) + "h)" : isOver ? " (+" + diff + "h)" : ""}
+                              </span>
+                              <span style={{fontSize:9,color:"#9ca3af"}}>{expanded?"▲":"▼"}</span>
+                            </div>
                           </div>
-                          {dayMismatches.length > 0 && (
-                            <div style={{display:"flex",gap:3,flexWrap:"wrap"}}>
-                              {dayMismatches.map(dm => (
-                                <span key={dm.ds} style={{fontSize:9,padding:"1px 5px",borderRadius:99,fontWeight:700,
-                                  background:dm.type==="missing"?"#fef2f2":"#fffbeb",
-                                  color:dm.type==="missing"?"#dc2626":"#d97706",
-                                  border:"1px solid "+(dm.type==="missing"?"#fca5a5":"#fde68a")}}>
-                                  {dm.date.toLocaleDateString("en-US",{weekday:"short"})}
-                                  {dm.type==="missing" ? " missing" : " " + dm.entered + "h entered / " + dm.expected + "h expected"}
-                                </span>
-                              ))}
+                          {/* Collapsible detail */}
+                          {expanded && (
+                            <div style={{padding:"0 8px 8px"}}>
+                              {dayMismatches.length > 0 && (
+                                <div style={{display:"flex",gap:3,flexWrap:"wrap",marginBottom:5}}>
+                                  {dayMismatches.map(dm => (
+                                    <span key={dm.ds} style={{fontSize:9,padding:"1px 5px",borderRadius:99,fontWeight:700,
+                                      background:dm.type==="missing"?"#fef2f2":"#fffbeb",
+                                      color:dm.type==="missing"?"#dc2626":"#d97706",
+                                      border:"1px solid "+(dm.type==="missing"?"#fca5a5":"#fde68a")}}>
+                                      {dm.date.toLocaleDateString("en-US",{weekday:"short"})}
+                                      {dm.type==="missing" ? " missing" : " " + dm.entered + "h / " + dm.expected + "h"}
+                                    </span>
+                                  ))}
+                                </div>
+                              )}
+                              <div style={{fontSize:8,color:"#6b7280",fontFamily:"monospace",lineHeight:1.8,background:"#f9fafb",borderRadius:4,padding:"3px 6px"}}>
+                                {debugDays.filter(d=>d.std>0).map((d,i) => (
+                                  <div key={i}>{d.day + "(std " + d.std + "h): " + (d.segs.length ? d.segs.join(" | ") : "no entry")}</div>
+                                ))}
+                              </div>
                             </div>
                           )}
-                          <div style={{marginTop:4,fontSize:8,color:"#6b7280",fontFamily:"monospace",lineHeight:1.8,background:"#f9fafb",borderRadius:4,padding:"3px 6px"}}>
-                            <div>{"Entered: " + enteredTotal + "h / Standard: " + standardTotal + "h"}</div>
-                            {debugDays.filter(d=>d.std>0).map((d,i) => (
-                              <div key={i}>{d.day + "(std " + d.std + "h): " + (d.segs.length ? d.segs.join(" | ") : "no entry")}</div>
-                            ))}
-                          </div>
                         </div>
                       );
                     })}
@@ -2488,7 +2498,7 @@ function WeekGrid({ filteredStaff, weekDates, getEntry, getDayFTE, nwMap, setEdi
               const alerts = getDayAlerts ? getDayAlerts(ds) : [];
               const isToday = ds === todayStr;
               return (
-                <th key={i} style={{...thS,background:isToday?"#fefce8":we?"#faf5ff":"#fff",minWidth:130,borderBottom:isToday?"3px solid #eab308":alerts.length?"3px solid "+(alerts[0].severity==="red"?"#ef4444":"#f59e0b"):""}}>
+                <th key={i} style={{...thS,background:isToday?"#fef08a":we?"#faf5ff":"#fff",minWidth:130,borderBottom:isToday?"3px solid #ca8a04":alerts.length?"3px solid "+(alerts[0].severity==="red"?"#ef4444":"#f59e0b"):"",outline:isToday?"2px solid #ca8a04":"none",outlineOffset:"-2px"}}>
                   {/* Holiday toggle */}
                   {getDailyStats && (() => {
                     const isHoliday = getDailyStats(ds)?.holiday;
@@ -2506,7 +2516,7 @@ function WeekGrid({ filteredStaff, weekDates, getEntry, getDayFTE, nwMap, setEdi
                       {dayNotes[ds] && <span title={dayNotes[ds]} style={{fontSize:10}}>📝</span>}
                       {getDailyStats && getDailyStats(ds)?.holiday && <span style={{fontSize:10}}>⛱</span>}
                     </div>
-                    <div style={{fontSize:14,fontWeight:800,color:isToday?"#854d0e":getDailyStats&&getDailyStats(ds)?.holiday?"#7c3aed":we?"#7c3aed":"#1e3a5f"}}>{fmtDisplay(date)}{isToday&&<span style={{marginLeft:4,fontSize:9,fontWeight:700,padding:"1px 5px",borderRadius:99,background:"#fef08a",color:"#854d0e",verticalAlign:"middle"}}>TODAY</span>}</div>
+                    <div style={{fontSize:14,fontWeight:800,color:isToday?"#92400e":getDailyStats&&getDailyStats(ds)?.holiday?"#7c3aed":we?"#7c3aed":"#1e3a5f"}}>{fmtDisplay(date)}{isToday&&<span style={{marginLeft:4,fontSize:9,fontWeight:700,padding:"1px 5px",borderRadius:99,background:"#fef08a",color:"#854d0e",verticalAlign:"middle"}}>TODAY</span>}</div>
                     <div style={{marginTop:4}}>
                       {/* Total FTE */}
                       <div style={{fontSize:11,fontWeight:800,color:alerts.length?(alerts[0].severity==="red"?"#dc2626":"#d97706"):isToday?"#854d0e":"#374151",marginBottom:3}}>
@@ -2662,7 +2672,7 @@ function WeekGrid({ filteredStaff, weekDates, getEntry, getDayFTE, nwMap, setEdi
 }
 
 // ─── Year At A Glance ─────────────────────────────────────────────────────────
-function YearView({ year, staff, getEntry, getDayFTE, nwMap, setWeekStart, setActiveTab, setDrillDay }) {
+function YearView({ year, staff, getEntry, getDayFTE, nwMap, setWeekStart, setActiveTab, setDrillDay, getDayAlerts }) {
   const [hovered, setHovered] = useState(null);
   const [metric, setMetric] = useState("fte"); // fte | staffed | nonwork
 
@@ -2730,24 +2740,33 @@ function YearView({ year, staff, getEntry, getDayFTE, nwMap, setWeekStart, setAc
                   const ds = fmt(date); const isToday = ds===today;
                   const fte = getDayFTE(ds);
                   return (
-                    <div key={ds}
-                      onMouseEnter={()=>setHovered({date,ds,fte})}
-                      onMouseLeave={()=>setHovered(null)}
-                      onClick={()=>{
-                        if(date.getDay()===0){setWeekStart(new Date(date));setActiveTab("grid");}
-                        else {setDrillDay(date);}
-                      }}
-                      style={{
-                        aspectRatio:"1",borderRadius:3,cursor:"pointer",
-                        background:getDayColor(date),
-                        border:isToday?"2px solid #1e3a5f":"1px solid transparent",
-                        display:"flex",alignItems:"center",justifyContent:"center",
-                        fontSize:8,fontWeight:isToday?800:500,color:isToday?"#1e3a5f":"#6b7280",
-                        transition:"transform 0.1s",transform:hovered?.ds===ds?"scale(1.2)":"scale(1)"
-                      }}
-                    >
-                      {date.getDate()}
-                    </div>
+                    {(() => {
+                      const alerts = getDayAlerts ? getDayAlerts(ds) : [];
+                      const alertColor = alerts.length ? (alerts[0].severity==="red" ? "#ef4444" : "#f59e0b") : null;
+                      return (
+                        <div key={ds}
+                          onMouseEnter={()=>setHovered({date,ds,fte,alerts})}
+                          onMouseLeave={()=>setHovered(null)}
+                          onClick={()=>{
+                            if(date.getDay()===0){setWeekStart(new Date(date));setActiveTab("grid");}
+                            else {setDrillDay(date);}
+                          }}
+                          style={{
+                            aspectRatio:"1",borderRadius:3,cursor:"pointer",
+                            background:getDayColor(date),
+                            border:isToday?"2px solid #1e3a5f":alertColor?"2px solid "+alertColor:"1px solid transparent",
+                            display:"flex",alignItems:"center",justifyContent:"center",position:"relative",
+                            fontSize:8,fontWeight:isToday?800:500,color:isToday?"#1e3a5f":"#6b7280",
+                            transition:"transform 0.1s",transform:hovered?.ds===ds?"scale(1.2)":"scale(1)"
+                          }}
+                        >
+                          {date.getDate()}
+                          {alertColor && (
+                            <div style={{position:"absolute",top:0,right:0,width:4,height:4,borderRadius:"50%",background:alertColor}} />
+                          )}
+                        </div>
+                      );
+                    })()}
                   );
                 })}
               </div>
