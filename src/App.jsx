@@ -220,6 +220,9 @@ async function sbLoadStaff() {
     id: r.id, name: r.name, team: r.team, fte: r.fte,
     defaultHours: r.default_hours, shiftStart: r.shift_start, shiftEnd: r.shift_end,
     defaultSchedule: r.default_schedule || [], notes: r.notes || "", archived: r.archived || false,
+    competencies: r.competencies || [],
+    startDate: r.start_date || null,
+    terminationDate: r.termination_date || null,
   }));
 }
 
@@ -301,6 +304,11 @@ async function sbLoadAlertSettings() {
 }
 
 // ─── Data savers ──────────────────────────────────────────────────────────────
+async function sbDeleteStaff(staffId) {
+  const sb = await getSB();
+  await sb.from("staff").delete().eq("id", String(staffId));
+}
+
 async function sbSaveStaff(staffArr) {
   const sb = await getSB();
   // Deduplicate by rounded ID — keep last occurrence
@@ -310,7 +318,11 @@ async function sbSaveStaff(staffArr) {
     id: String(s.id), name: s.name, team: s.team, fte: s.fte,
     default_hours: s.defaultHours, shift_start: s.shiftStart || "08:00",
     shift_end: s.shiftEnd || "16:00", default_schedule: s.defaultSchedule || [],
-    notes: s.notes || "", archived: s.archived || false, updated_at: new Date().toISOString(),
+    notes: s.notes || "", archived: s.archived || false,
+    competencies: s.competencies || [],
+    start_date: s.startDate || null,
+    termination_date: s.terminationDate || null,
+    updated_at: new Date().toISOString(),
   }));
   const { error } = await sb.from("staff").upsert(rows, { onConflict: "id" });
   if (error) throw new Error(`Staff save failed: ${error.message}`);
@@ -4527,7 +4539,18 @@ function StaffTab({ staff, updateStaff, entries, updateEntries, weekStart, nonWo
   const [confirmDelete, setConfirmDelete] = useState(null);
   const [showArchived, setShowArchived] = useState(false);
   const remove = id => setConfirmDelete(id);
-  const confirmRemove = () => { updateStaff(staff.filter(s => s.id !== confirmDelete)); setConfirmDelete(null); };
+  const confirmRemove = async () => {
+    const id = confirmDelete;
+    try {
+      const sb = await getSB();
+      // Delete staff record and all their entries from Supabase
+      await sb.from("entries").delete().eq("staff_id", String(id));
+      await sb.from("pto_balances").delete().eq("staff_id", String(id));
+      await sbDeleteStaff(id);
+    } catch(e) { console.error("Delete failed:", e); }
+    updateStaff(staff.filter(s => s.id !== id));
+    setConfirmDelete(null);
+  };
   const update = (id, field, value) => updateStaff(staff.map(s => s.id === id ? { ...s, [field]: value } : s));
   const archiveStaff = (id) => updateStaff(staff.map(s => s.id === id ? { ...s, archived: true } : s));
   const unarchiveStaff = (id) => updateStaff(staff.map(s => s.id === id ? { ...s, archived: false } : s));
