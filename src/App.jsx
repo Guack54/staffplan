@@ -498,6 +498,9 @@ export default function StaffingApp() {
   const [staff, setStaff] = useState([]);
   const [nonWorkTypes, setNonWorkTypes] = useState(DEFAULT_NON_WORK);
   const [locations, setLocations] = useState(DEFAULT_LOCATIONS);
+  const [competencies, setCompetencies] = useState([]); // [{ id, name, color }]
+  const [filterCompetencies, setFilterCompetencies] = useState([]); // ids — AND logic
+  const [showCompetencyEditor, setShowCompetencyEditor] = useState(false);
   const [editingCell, setEditingCell] = useState(null);
   const [drillDay, setDrillDay] = useState(null);
   const [activeTab, setActiveTab] = useState("grid");
@@ -575,7 +578,9 @@ export default function StaffingApp() {
         if (sbNW)      setNonWorkTypes(sbNW);
         if (sbAlerts)  setAlertSettings(sbAlerts);
         const savedLocs = await loadFromStorage("staffplan:locations", DEFAULT_LOCATIONS);
+        const savedComps = await loadFromStorage("staffplan:competencies", []);
         if (savedLocs) setLocations(savedLocs);
+        if (savedComps) setCompetencies(savedComps);
         if (sbPTO)     setPtoBalances(sbPTO);
         if (sbNotes)   setDayNotes(sbNotes);
         if (sbVisits)  setVisitData(sbVisits);
@@ -656,6 +661,7 @@ export default function StaffingApp() {
   const updateDailyStats = useCallback((val) => { pushHistory(staff, entries, dailyStats); setDailyStats(val); triggerSave(staff, entries, val, nonWorkTypes, alertSettings, ptoBalances, dayNotes); }, [staff, entries, dailyStats, nonWorkTypes, alertSettings, ptoBalances, dayNotes, triggerSave, pushHistory]);
   const updateNonWorkTypes = useCallback((val) => { setNonWorkTypes(val); triggerSave(staff, entries, dailyStats, val, alertSettings, ptoBalances, dayNotes); }, [staff, entries, dailyStats, alertSettings, ptoBalances, dayNotes, triggerSave]);
   const updateLocations = useCallback((val) => { setLocations(val); saveToStorage("staffplan:locations", val); }, []);
+  const updateCompetencies = useCallback((val) => { setCompetencies(val); saveToStorage("staffplan:competencies", val); }, []);
   const updateAlertSettings = useCallback((val) => { setAlertSettings(val); triggerSave(staff, entries, dailyStats, nonWorkTypes, val, ptoBalances, dayNotes); }, [staff, entries, dailyStats, nonWorkTypes, ptoBalances, dayNotes, triggerSave]);
   const updatePtoBalances = useCallback((val) => { setPtoBalances(val); triggerSave(staff, entries, dailyStats, nonWorkTypes, alertSettings, val, dayNotes); }, [staff, entries, dailyStats, nonWorkTypes, alertSettings, dayNotes, triggerSave]);
   const updateDayNotes = useCallback((val) => { setDayNotes(val); triggerSave(staff, entries, dailyStats, nonWorkTypes, alertSettings, ptoBalances, val); }, [staff, entries, dailyStats, nonWorkTypes, alertSettings, ptoBalances, triggerSave]);
@@ -1156,6 +1162,7 @@ export default function StaffingApp() {
                   canEdit && { icon:"📦", label:`Archived Staff${staff.some(s=>s.archived)?` (${staff.filter(s=>s.archived).length})`:""}`, color:"#92400e", action:()=>setShowArchivedManager(true), desc:"View staff who have been archived — restore or permanently delete them" },
                   isAdmin && { icon:"⚙", label:"Non-Work Codes",     color:"#8b5cf6", action:()=>setShowNonWorkEditor(true),  desc:"Create and manage leave codes like VAC, SICK, PFL and their colors" },
                   isAdmin && { icon:"📍", label:"Locations",             color:"#0ea5e9", action:()=>setShowLocationEditor(true),  desc:"Define locations within each team that staff can be assigned to" },
+                  isAdmin && { icon:"🎯", label:"Competencies",           color:"#10b981", action:()=>setShowCompetencyEditor(true), desc:"Define clinical competency areas staff can be qualified in" },
                   isAdmin && { icon:"🔔", label:"Alert Settings",     color:"#f59e0b", action:()=>setShowAlertsEditor(true),   desc:"Set FTE and census thresholds for warnings" },
                   isAdmin && { icon:"👤", label:"Manage Users",       color:"#1e3a5f", action:()=>setShowUserManager(true),    desc:"Add users and control who can view or edit the schedule" },
                   { icon:"🔐", label:"Change Password",               color:"#374151", action:()=>setShowPwManager(true),      desc:"Update your account password" },
@@ -1205,7 +1212,7 @@ export default function StaffingApp() {
             {compactMode?"⊞ Expand":"⊟ Compact"}
           </button>
 
-          <div style={{marginLeft:"auto",display:"flex",gap:5,flexWrap:"wrap"}}>
+          <div style={{marginLeft:"auto",display:"flex",gap:5,flexWrap:"wrap",alignItems:"center"}}>
             {["All",...TEAMS].map(t=>(
               <button key={t} onClick={()=>setFilterTeam(t)} style={{
                 padding:"3px 10px",borderRadius:99,fontSize:11,fontWeight:600,cursor:"pointer",
@@ -1214,6 +1221,28 @@ export default function StaffingApp() {
                 border:"1px solid "+(filterTeam===t?"transparent":"#e5e7eb")
               }}>{t}</button>
             ))}
+            {competencies.length > 0 && (
+              <div style={{width:1,height:18,background:"#e5e7eb",margin:"0 4px"}} />
+            )}
+            {competencies.map(c => {
+              const active = filterCompetencies.includes(c.id);
+              return (
+                <button key={c.id} onClick={()=>setFilterCompetencies(prev =>
+                  active ? prev.filter(x=>x!==c.id) : [...prev, c.id]
+                )} style={{
+                  padding:"3px 10px",borderRadius:99,fontSize:11,fontWeight:600,cursor:"pointer",
+                  background:active?c.color:"#f9fafb",
+                  color:active?"#fff":"#6b7280",
+                  border:"1px solid "+(active?c.color:"#e5e7eb")
+                }}>🎯 {c.name}</button>
+              );
+            })}
+            {filterCompetencies.length > 0 && (
+              <button onClick={()=>setFilterCompetencies([])} style={{
+                padding:"3px 8px",borderRadius:99,fontSize:10,fontWeight:700,cursor:"pointer",
+                background:"#f3f4f6",color:"#6b7280",border:"1px solid #e5e7eb"
+              }}>✕ Clear</button>
+            )}
           </div>
         </>}
 
@@ -1260,7 +1289,7 @@ export default function StaffingApp() {
             updateStaff={updateStaff} staff={staff} compactMode={compactMode} getDayAlerts={getDayAlerts}
             dayNotes={dayNotes} updateDayNotes={updateDayNotes} alertSettings={alertSettings}
             getDailyStats={getDailyStats} setDailyStat={setDailyStat} setHoliday={setHoliday} todayStr={todayStr}
-            canEdit={canEdit} />
+            canEdit={canEdit} competencies={competencies} filterCompetencies={filterCompetencies} setFilterCompetencies={setFilterCompetencies} />
         )}
         {activeTab==="month" && (
           <MonthView year={monthView.year} month={monthView.month} staff={staff} getEntry={getEntry}
@@ -1306,7 +1335,7 @@ export default function StaffingApp() {
             <div style={{padding:20}}>
               <StaffTab staff={staff} updateStaff={updateStaff} entries={entries} updateEntries={updateEntries}
                 weekStart={weekStart} nonWorkTypes={nonWorkTypes} ptoBalances={ptoBalances}
-                updatePtoBalances={updatePtoBalances} ptoAlerts={ptoAlerts} />
+                updatePtoBalances={updatePtoBalances} ptoAlerts={ptoAlerts} competencies={competencies} />
             </div>
           </div>
         </div>
@@ -1367,6 +1396,7 @@ export default function StaffingApp() {
       {showBatchEntry && <BatchEntryModal staff={staff} entries={entries} updateEntries={updateEntries} nonWorkTypes={nonWorkTypes} onClose={()=>setShowBatchEntry(false)} />}
       {showUserManager && <UserManagerModal currentUser={currentUser} onClose={()=>setShowUserManager(false)} />}
       {showLocationEditor && <LocationEditor locations={locations} updateLocations={updateLocations} onClose={()=>setShowLocationEditor(false)} />}
+      {showCompetencyEditor && <CompetencyEditor competencies={competencies} updateCompetencies={updateCompetencies} onClose={()=>setShowCompetencyEditor(false)} />}
       {menuOpen && <div style={{position:"fixed",inset:0,zIndex:499}} onClick={()=>setMenuOpen(false)} />}
     </div>
   );
@@ -1964,6 +1994,86 @@ function PasswordManager({ currentUser, onClose }) {
 }
 
 
+
+// ─── Competency Editor ────────────────────────────────────────────────────────
+function CompetencyEditor({ competencies, updateCompetencies, onClose }) {
+  const [items, setItems] = useState(competencies.map(c=>({...c})));
+  const [newName, setNewName] = useState("");
+  const [newColor, setNewColor] = useState("#10b981");
+
+  const PRESET_COLORS = ["#10b981","#ef4444","#f59e0b","#3b82f6","#8b5cf6","#06b6d4","#f97316","#ec4899","#64748b","#dc2626"];
+
+  const addItem = () => {
+    if (!newName.trim()) return;
+    const id = Date.now();
+    setItems(prev => [...prev, { id, name: newName.trim(), color: newColor }]);
+    setNewName("");
+  };
+
+  const removeItem = (id) => setItems(prev => prev.filter(c => c.id !== id));
+  const updateColor = (id, color) => setItems(prev => prev.map(c => c.id===id ? {...c, color} : c));
+  const updateName = (id, name) => setItems(prev => prev.map(c => c.id===id ? {...c, name} : c));
+
+  const save = () => { updateCompetencies(items); onClose(); };
+
+  return (
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.5)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:3000}} onClick={onClose}>
+      <div style={{background:"#fff",borderRadius:18,padding:28,width:480,maxHeight:"85vh",overflow:"auto",boxShadow:"0 25px 60px rgba(0,0,0,0.22)"}} onClick={e=>e.stopPropagation()}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}>
+          <div style={{fontSize:17,fontWeight:800,color:"#1e3a5f"}}>🎯 Competency Areas</div>
+          <button onClick={onClose} style={{background:"#f3f4f6",border:"none",borderRadius:8,padding:"5px 12px",cursor:"pointer",fontWeight:700}}>✕</button>
+        </div>
+        <div style={{fontSize:12,color:"#6b7280",marginBottom:16}}>
+          Define clinical competency areas. Assign them to staff members, then filter the weekly schedule by competency to see who can cover specific areas.
+        </div>
+
+        {/* Existing items */}
+        <div style={{display:"flex",flexDirection:"column",gap:6,marginBottom:18}}>
+          {items.length === 0 && (
+            <div style={{textAlign:"center",padding:"16px 0",color:"#9ca3af",fontSize:13}}>No competencies defined yet</div>
+          )}
+          {items.map(c => (
+            <div key={c.id} style={{display:"flex",alignItems:"center",gap:8,padding:"8px 12px",borderRadius:10,background:"#f9fafb",border:"1px solid #f3f4f6"}}>
+              <input type="color" value={c.color} onChange={e=>updateColor(c.id,e.target.value)}
+                style={{width:28,height:28,borderRadius:6,border:"1px solid #e5e7eb",cursor:"pointer",padding:2}} />
+              <input value={c.name} onChange={e=>updateName(c.id,e.target.value)}
+                style={{flex:1,border:"1px solid #e5e7eb",borderRadius:7,padding:"5px 8px",fontSize:13,fontWeight:600}} />
+              <span style={{fontSize:11,padding:"2px 10px",borderRadius:99,background:c.color+"22",color:c.color,fontWeight:700,border:"1px solid "+c.color+"44"}}>{c.name}</span>
+              <button onClick={()=>removeItem(c.id)} style={{background:"#fee2e2",border:"none",borderRadius:6,color:"#dc2626",fontWeight:700,cursor:"pointer",padding:"3px 8px",fontSize:11}}>✕</button>
+            </div>
+          ))}
+        </div>
+
+        {/* Add new */}
+        <div style={{borderTop:"1px solid #f3f4f6",paddingTop:16,marginBottom:18}}>
+          <div style={{fontSize:12,fontWeight:700,color:"#374151",marginBottom:10}}>Add New Competency</div>
+          <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+            <div style={{display:"flex",gap:4,flexWrap:"wrap"}}>
+              {PRESET_COLORS.map(col => (
+                <button key={col} onClick={()=>setNewColor(col)} style={{
+                  width:20,height:20,borderRadius:"50%",background:col,border:newColor===col?"3px solid #1e3a5f":"2px solid transparent",cursor:"pointer",padding:0
+                }} />
+              ))}
+              <input type="color" value={newColor} onChange={e=>setNewColor(e.target.value)}
+                style={{width:20,height:20,borderRadius:"50%",border:"1px solid #e5e7eb",cursor:"pointer",padding:1}} />
+            </div>
+            <input value={newName} onChange={e=>setNewName(e.target.value)}
+              placeholder="e.g. Burn, NICU, Psych..."
+              onKeyDown={e=>e.key==="Enter"&&addItem()}
+              style={{flex:1,minWidth:140,border:"1px solid #e5e7eb",borderRadius:8,padding:"6px 10px",fontSize:13}} />
+            <button onClick={addItem} style={{padding:"6px 16px",borderRadius:8,background:"#1e3a5f",color:"#fff",border:"none",fontWeight:700,fontSize:13,cursor:"pointer"}}>+ Add</button>
+          </div>
+        </div>
+
+        <div style={{display:"flex",gap:10,justifyContent:"flex-end"}}>
+          <button onClick={onClose} style={{padding:"8px 20px",borderRadius:9,background:"#f3f4f6",border:"none",fontSize:13,fontWeight:600,cursor:"pointer"}}>Cancel</button>
+          <button onClick={save} style={{padding:"8px 20px",borderRadius:9,background:"#1e3a5f",color:"#fff",border:"none",fontSize:13,fontWeight:700,cursor:"pointer"}}>Save</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Location Editor ──────────────────────────────────────────────────────────
 function LocationEditor({ locations, updateLocations, onClose }) {
   const [locs, setLocs] = useState(locations.map(l=>({...l})));
@@ -2399,7 +2509,7 @@ function MismatchRow({ item }) {
 }
 
 // ─── Week Grid ────────────────────────────────────────────────────────────────
-function WeekGrid({ filteredStaff, weekDates, getEntry, getDayFTE, nwMap, setEditingCell, setDrillDay, editingName, setEditingName, tempName, setTempName, updateStaff, staff, compactMode, getDayAlerts, dayNotes, updateDayNotes, alertSettings, getDailyStats, setDailyStat, setHoliday, todayStr, canEdit }) {
+function WeekGrid({ filteredStaff, weekDates, getEntry, getDayFTE, nwMap, setEditingCell, setDrillDay, editingName, setEditingName, tempName, setTempName, updateStaff, staff, compactMode, getDayAlerts, dayNotes, updateDayNotes, alertSettings, getDailyStats, setDailyStat, setHoliday, todayStr, canEdit, competencies=[], filterCompetencies=[], setFilterCompetencies }) {
   const [confirmHolidayDs, setConfirmHolidayDs] = useState(null);
   const [showHourAlerts, setShowHourAlerts] = useState(false);
 
@@ -2568,6 +2678,23 @@ function WeekGrid({ filteredStaff, weekDates, getEntry, getDayFTE, nwMap, setEdi
                   )}
                 </div>
                 <div style={{fontSize:10,color:TEAM_COLORS[s.team]?.text,marginLeft:13}}>{s.team}</div>
+                {!compactMode && (s.competencies||[]).length > 0 && (
+                  <div style={{display:"flex",gap:3,flexWrap:"wrap",marginLeft:13,marginTop:3}}>
+                    {(s.competencies||[]).map(cid => {
+                      const comp = competencies.find(c=>c.id===cid);
+                      if (!comp) return null;
+                      const isActive = filterCompetencies.includes(cid);
+                      return (
+                        <span key={cid} style={{
+                          fontSize:8,padding:"1px 5px",borderRadius:99,fontWeight:700,
+                          background:isActive?comp.color:comp.color+"22",
+                          color:isActive?"#fff":comp.color,
+                          border:"1px solid "+comp.color+"44"
+                        }}>{comp.name}</span>
+                      );
+                    })}
+                  </div>
+                )}
               </td>
               {weekDates.map((date,di) => {
                 const ds = fmt(date); const segs = getEntry(s.id,ds); const we = isWeekend(date);
@@ -4329,7 +4456,7 @@ function TimesheetTab({ staff, entries, weekStart, nonWorkTypes }) {
 
 // ─── Staff Tab ────────────────────────────────────────────────────────────────
 // defaultSchedule: [{day:0-6, team, hours}]  (day 0=Sun)
-function StaffTab({ staff, updateStaff, entries, updateEntries, weekStart, nonWorkTypes, ptoBalances, updatePtoBalances, ptoAlerts }) {
+function StaffTab({ staff, updateStaff, entries, updateEntries, weekStart, nonWorkTypes, ptoBalances, updatePtoBalances, ptoAlerts, competencies=[] }) {
   const [newName, setNewName] = useState("");
   const [newTeam, setNewTeam] = useState(TEAMS[0]);
   const [editingId, setEditingId] = useState(null);
@@ -4570,6 +4697,28 @@ function StaffTab({ staff, updateStaff, entries, updateEntries, weekStart, nonWo
                       style={{background:"#f3f4f6",border:"1px solid #e5e7eb",borderRadius:6,color:"#6b7280",fontWeight:700,cursor:"pointer",padding:"3px 9px",fontSize:11,whiteSpace:"nowrap"}}>📦 Archive</button>
                   )}
                 </div>
+                {/* Competencies */}
+                {competencies.length > 0 && (
+                  <div style={{marginTop:6,display:"flex",gap:4,flexWrap:"wrap",alignItems:"center"}}>
+                    <span style={{fontSize:10,color:"#9ca3af",fontWeight:600,flexShrink:0}}>🎯 Competencies:</span>
+                    {competencies.map(c => {
+                      const has = (s.competencies||[]).includes(c.id);
+                      return (
+                        <button key={c.id} onClick={()=>{
+                          const cur = s.competencies||[];
+                          const next = has ? cur.filter(x=>x!==c.id) : [...cur, c.id];
+                          update(s.id, "competencies", next);
+                        }} style={{
+                          fontSize:10,padding:"2px 8px",borderRadius:99,fontWeight:700,cursor:"pointer",
+                          background:has?c.color:c.color+"15",
+                          color:has?"#fff":c.color,
+                          border:"1.5px solid "+(has?c.color:c.color+"44"),
+                          transition:"all 0.15s"
+                        }}>{c.name}</button>
+                      );
+                    })}
+                  </div>
+                )}
                 {/* Employment dates */}
                 <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap",marginTop:4}}>
                   <div style={{display:"flex",alignItems:"center",gap:4}}>
