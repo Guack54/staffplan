@@ -1999,7 +1999,7 @@ function PasswordManager({ currentUser, onClose }) {
 // ─── Competency Filter Dropdown ───────────────────────────────────────────────
 function CompetencyFilterDropdown({ competencies, filterCompetencies, setFilterCompetencies }) {
   const [open, setOpen] = useState(false);
-  const ref = React.useRef(null);
+  const ref = useRef(null);
 
   // Close on outside click
   useEffect(() => {
