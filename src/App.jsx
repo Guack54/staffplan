@@ -1299,7 +1299,7 @@ export default function StaffingApp() {
           <DayView date={dayView} staff={staff} getEntry={getEntry} setEntrySegments={setEntrySegments}
             getDailyStats={getDailyStats} setDailyStat={setDailyStat} setHoliday={setHoliday} getDayFTE={getDayFTE}
             nwMap={nwMap} nonWorkTypes={nonWorkTypes} filterTeam={filterTeam} setFilterTeam={setFilterTeam}
-            dayNotes={dayNotes} updateDayNotes={updateDayNotes} getDayAlerts={getDayAlerts} />
+            dayNotes={dayNotes} updateDayNotes={updateDayNotes} getDayAlerts={getDayAlerts} canEdit={canEdit} />
         )}
         {activeTab==="grid" && (
           <WeekGrid filteredStaff={filteredStaff} weekDates={weekDates} getEntry={getEntry} getDayFTE={getDayFTE}
@@ -1343,7 +1343,7 @@ export default function StaffingApp() {
       {editingCell && <CellEditor staffId={editingCell.staffId} dateStr={editingCell.dateStr} staff={staff}
         getEntry={getEntry} setEntrySegments={setEntrySegments} nwMap={nwMap} nonWorkTypes={nonWorkTypes} onClose={()=>setEditingCell(null)} getDailyStats={getDailyStats} locations={locations} />}
       {drillDay && <DayDrillDown date={drillDay} staff={staff} getEntry={getEntry} getDailyStats={getDailyStats}
-        setDailyStat={setDailyStat} setHoliday={setHoliday} getDayFTE={getDayFTE} nwMap={nwMap} onClose={()=>setDrillDay(null)} />}
+        setDailyStat={setDailyStat} setHoliday={setHoliday} getDayFTE={getDayFTE} nwMap={nwMap} onClose={()=>setDrillDay(null)} canEdit={canEdit} />}
       {showStaffManager && (
         <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.5)",display:"flex",alignItems:"flex-start",justifyContent:"center",zIndex:3000,overflowY:"auto",padding:"24px 16px"}} onClick={()=>setShowStaffManager(false)}>
           <div style={{background:"#f8fafc",borderRadius:18,width:"100%",maxWidth:1100,boxShadow:"0 25px 60px rgba(0,0,0,0.22)",marginBottom:24}} onClick={e=>e.stopPropagation()}>
@@ -1426,7 +1426,7 @@ const navBtn = { padding:"5px 12px",borderRadius:8,background:"#f1f5f9",border:"
 const todayBtn = { padding:"5px 12px",borderRadius:8,background:"#eff6ff",border:"1px solid #bfdbfe",cursor:"pointer",fontSize:12,fontWeight:600,color:"#1d4ed8" };
 
 // ─── Daily View ──────────────────────────────────────────────────────────────
-function DayView({ date, staff, getEntry, setEntrySegments, getDailyStats, setDailyStat, setHoliday, getDayFTE, nwMap, nonWorkTypes, filterTeam, setFilterTeam, dayNotes, updateDayNotes, getDayAlerts }) {
+function DayView({ date, staff, getEntry, setEntrySegments, getDailyStats, setDailyStat, setHoliday, getDayFTE, nwMap, nonWorkTypes, filterTeam, setFilterTeam, dayNotes, updateDayNotes, getDayAlerts, canEdit=false }) {
   const ds = fmt(date);
   const stats = getDailyStats(ds);
   const fte = getDayFTE(ds);
@@ -1488,7 +1488,7 @@ function DayView({ date, staff, getEntry, setEntrySegments, getDailyStats, setDa
           <div style={{display:"flex",alignItems:"center",gap:8,fontSize:13,fontWeight:700,color:"#7c3aed"}}>
             ⛱ Holiday — staff are not scheduled by default. Manually enter anyone working holiday hours below.
           </div>
-          <button onClick={()=>setDailyStat(ds,"holiday",false)} style={{fontSize:11,padding:"3px 10px",borderRadius:6,background:"#7c3aed",color:"#fff",border:"none",cursor:"pointer",fontWeight:700,flexShrink:0}}>Remove Holiday</button>
+          {canEdit && <button onClick={()=>setDailyStat(ds,"holiday",false)} style={{fontSize:11,padding:"3px 10px",borderRadius:6,background:"#7c3aed",color:"#fff",border:"none",cursor:"pointer",fontWeight:700,flexShrink:0}}>Remove Holiday</button>}
         </div>
       )}
 
@@ -1502,16 +1502,20 @@ function DayView({ date, staff, getEntry, setEntrySegments, getDailyStats, setDa
       {/* Day note */}
       <div style={{display:"flex",alignItems:"center",gap:8,background:"#fff",border:"1px solid #e5e7eb",borderRadius:10,padding:"8px 14px"}}>
         <span style={{fontSize:14}}>📝</span>
-        <input
-          value={dayNotes?.[ds]||""}
-          onChange={e => updateDayNotes && updateDayNotes({...dayNotes,[ds]:e.target.value})}
-          placeholder="Add a note for today (e.g. short-staffed due to training, holiday coverage...)"
-          style={{flex:1,border:"none",outline:"none",fontSize:12,color:"#374151",background:"transparent"}}
-        />
+        {canEdit ? (
+          <input
+            value={dayNotes?.[ds]||""}
+            onChange={e => updateDayNotes && updateDayNotes({...dayNotes,[ds]:e.target.value})}
+            placeholder="Add a note for today..."
+            style={{flex:1,border:"none",outline:"none",fontSize:12,color:"#374151",background:"transparent"}}
+          />
+        ) : (
+          <span style={{flex:1,fontSize:12,color:dayNotes?.[ds]?"#374151":"#9ca3af"}}>{dayNotes?.[ds]||"No note for today"}</span>
+        )}
       </div>
 
       {/* Day summary cards — Total FTE + one card per team with FTE & census aligned */}
-      <div style={{ display: "grid", gridTemplateColumns: "160px repeat(" + TEAMS.length + ", 1fr)", gap: 10 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "100px repeat(" + TEAMS.length + ", 1fr)", gap: 8 }}>
 
         {/* Total FTE card */}
         <div style={{ background: we ? "#faf5ff" : "#fff", border: "1px solid " + (we ? "#e9d5ff" : "#e5e7eb"), borderRadius: 12, padding: "14px 16px", display: "flex", flexDirection: "column", justifyContent: "center" }}>
@@ -1532,41 +1536,40 @@ function DayView({ date, staff, getEntry, setEntrySegments, getDailyStats, setDa
           const ptsPerFTE = census > 0 && fte.byTeam[t] > 0 ? (census / fte.byTeam[t]).toFixed(1) : "—";
           const ptsPerStaff = census > 0 && teamStaffCount > 0 ? (census / teamStaffCount).toFixed(1) : "—";
           return (
-            <div key={t} style={{ background: tc.bg, border: "1px solid " + tc.dot + "44", borderRadius: 12, padding: "14px 16px" }}>
-              {/* Team label */}
-              <div style={{ fontSize: 11, fontWeight: 800, color: tc.text, textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 10 }}>{t}</div>
-
-              {/* Two-column: FTE | Census */}
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8 }}>
+            <div key={t} style={{ background: tc.bg, border: "1px solid " + tc.dot + "44", borderRadius: 10, padding: "8px 10px" }}>
+              <div style={{ fontSize: 10, fontWeight: 800, color: tc.text, textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 5 }}>{t}</div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 5, marginBottom: 5 }}>
                 {/* FTE */}
-                <div style={{ background: "rgba(255,255,255,0.5)", borderRadius: 8, padding: "8px 10px" }}>
-                  <div style={{ fontSize: 9, color: tc.text + "99", fontWeight: 700, textTransform: "uppercase", marginBottom: 2 }}>FTE</div>
-                  <div style={{ fontSize: 22, fontWeight: 800, color: tc.text, lineHeight: 1 }}>{teamFTE}</div>
-                  <div style={{ fontSize: 9, color: tc.text + "88", marginTop: 2 }}>{teamStaffCount} staff</div>
+                <div style={{ background: "rgba(255,255,255,0.5)", borderRadius: 6, padding: "5px 7px" }}>
+                  <div style={{ fontSize: 9, color: tc.text + "99", fontWeight: 700, textTransform: "uppercase", marginBottom: 1 }}>FTE</div>
+                  <div style={{ fontSize: 16, fontWeight: 800, color: tc.text, lineHeight: 1 }}>{teamFTE}</div>
+                  <div style={{ fontSize: 9, color: tc.text + "88", marginTop: 1 }}>{teamStaffCount} staff</div>
                 </div>
                 {/* Census */}
-                <div style={{ background: "rgba(255,255,255,0.5)", borderRadius: 8, padding: "8px 10px" }}>
-                  <div style={{ fontSize: 9, color: tc.text + "99", fontWeight: 700, textTransform: "uppercase", marginBottom: 2 }}>Census</div>
-                  <input
-                    type="number" min="0"
-                    value={stats.census?.[t] || ""}
-                    onChange={e => setDailyStat(ds, "census", { ...stats.census, [t]: e.target.value === "" ? 0 : Number(e.target.value) })}
-                    style={{ width: "100%", border: "none", borderRadius: 4, padding: "0", fontSize: 22, fontWeight: 800, color: tc.text, background: "transparent", lineHeight: 1 }}
-                    placeholder="0"
-                  />
-                  <div style={{ fontSize: 9, color: tc.text + "88", marginTop: 2 }}>patients</div>
+                <div style={{ background: "rgba(255,255,255,0.5)", borderRadius: 6, padding: "5px 7px" }}>
+                  <div style={{ fontSize: 9, color: tc.text + "99", fontWeight: 700, textTransform: "uppercase", marginBottom: 1 }}>Census</div>
+                  {canEdit ? (
+                    <input
+                      type="number" min="0"
+                      value={stats.census?.[t] || ""}
+                      onChange={e => setDailyStat(ds, "census", { ...stats.census, [t]: e.target.value === "" ? 0 : Number(e.target.value) })}
+                      style={{ width: "100%", border: "none", borderRadius: 4, padding: "0", fontSize: 16, fontWeight: 800, color: tc.text, background: "transparent", lineHeight: 1 }}
+                      placeholder="0"
+                    />
+                  ) : (
+                    <div style={{ fontSize: 16, fontWeight: 800, color: tc.text, lineHeight: 1 }}>{stats.census?.[t] || 0}</div>
+                  )}
+                  <div style={{ fontSize: 9, color: tc.text + "88", marginTop: 1 }}>patients</div>
                 </div>
               </div>
-
-              {/* Ratio row */}
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, borderTop: "1px solid " + tc.dot + "22", paddingTop: 8 }}>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4, borderTop: "1px solid " + tc.dot + "22", paddingTop: 4 }}>
                 <div style={{ textAlign: "center" }}>
-                  <div style={{ fontSize: 9, color: tc.text + "88", fontWeight: 600 }}>pts / FTE</div>
-                  <div style={{ fontSize: 14, fontWeight: 800, color: tc.text }}>{ptsPerFTE}</div>
+                  <div style={{ fontSize: 8, color: tc.text + "88", fontWeight: 600 }}>pts/FTE</div>
+                  <div style={{ fontSize: 11, fontWeight: 800, color: tc.text }}>{ptsPerFTE}</div>
                 </div>
                 <div style={{ textAlign: "center" }}>
-                  <div style={{ fontSize: 9, color: tc.text + "88", fontWeight: 600 }}>pts / staff</div>
-                  <div style={{ fontSize: 14, fontWeight: 800, color: tc.text }}>{ptsPerStaff}</div>
+                  <div style={{ fontSize: 8, color: tc.text + "88", fontWeight: 600 }}>pts/staff</div>
+                  <div style={{ fontSize: 11, fontWeight: 800, color: tc.text }}>{ptsPerStaff}</div>
                 </div>
               </div>
             </div>
@@ -2703,7 +2706,7 @@ function WeekGrid({ filteredStaff, weekDates, getEntry, getDayFTE, nwMap, setEdi
                     return (
                       <div style={{display:"flex",justifyContent:"flex-end",marginBottom:1}}>
                         <div onClick={e=>e.stopPropagation()}>
-                          <HolidayToggleBtn ds={ds} isHoliday={isHoliday} setHoliday={setHoliday} setDailyStat={setDailyStat} small={true} />
+                          {canEdit && <HolidayToggleBtn ds={ds} isHoliday={isHoliday} setHoliday={setHoliday} setDailyStat={setDailyStat} small={true} />}
                         </div>
                       </div>
                     );
@@ -3233,7 +3236,7 @@ function CellEditor({ staffId, dateStr, staff, getEntry, setEntrySegments, nwMap
 }
 
 // ─── Day Drill Down ───────────────────────────────────────────────────────────
-function DayDrillDown({ date, staff, getEntry, getDailyStats, setDailyStat, setHoliday, getDayFTE, nwMap, onClose }) {
+function DayDrillDown({ date, staff, getEntry, getDailyStats, setDailyStat, setHoliday, getDayFTE, nwMap, onClose, canEdit=false }) {
   const ds = fmt(date); const stats = getDailyStats(ds); const fte = getDayFTE(ds);
   return (
     <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.5)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:999}} onClick={onClose}>
@@ -3241,7 +3244,7 @@ function DayDrillDown({ date, staff, getEntry, getDailyStats, setDailyStat, setH
         <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:14,flexWrap:"wrap"}}>
           <div style={{fontSize:20,fontWeight:800,color:"#111827"}}>{date.toLocaleDateString("en-US",{weekday:"long",month:"long",day:"numeric"})}</div>
           {stats.holiday && <span style={{padding:"3px 10px",borderRadius:99,background:"#ede9fe",color:"#7c3aed",fontSize:12,fontWeight:700}}>⛱ Holiday</span>}
-          <HolidayToggleBtn ds={ds} isHoliday={stats.holiday} setHoliday={setHoliday} setDailyStat={setDailyStat} />
+          {canEdit && <HolidayToggleBtn ds={ds} isHoliday={stats.holiday} setHoliday={setHoliday} setDailyStat={setDailyStat} />}
         </div>
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:20}}>
           <StatCard label="Total FTE" value={fte.total} color="#1e3a5f" />
@@ -3259,7 +3262,11 @@ function DayDrillDown({ date, staff, getEntry, getDailyStats, setDailyStat, setH
             return (
               <div key={t} style={{background:tc.bg,borderRadius:10,padding:"10px 12px",border:"1px solid "+tc.dot+"44"}}>
                 <label style={{...lbl,color:tc.text}}>{t}</label>
-                <input type="number" min="0" value={stats.census?.[t]||""} onChange={e=>setDailyStat(ds,"census",{...stats.census,[t]:e.target.value===''?0:Number(e.target.value)})} style={{...inp,background:"transparent",border:"1px solid "+tc.dot+"55",color:tc.text,fontWeight:800,fontSize:18}} placeholder="0" />
+                {canEdit ? (
+                  <input type="number" min="0" value={stats.census?.[t]||""} onChange={e=>setDailyStat(ds,"census",{...stats.census,[t]:e.target.value===''?0:Number(e.target.value)})} style={{...inp,background:"transparent",border:"1px solid "+tc.dot+"55",color:tc.text,fontWeight:800,fontSize:18}} placeholder="0" />
+                ) : (
+                  <div style={{fontSize:18,fontWeight:800,color:tc.text,padding:"6px 0"}}>{stats.census?.[t]||0}</div>
+                )}
                 <div style={{fontSize:10,color:tc.text+"aa",marginTop:3}}>{census>0?(census/teamStaffCount).toFixed(1)+" pts/staff":"—"}</div>
               </div>
             );
