@@ -274,8 +274,6 @@ async function sbLoadDailyStats() {
     if (data.length < pageSize) break;
     from += pageSize;
   }
-  const holidays = Object.entries(out).filter(([,v])=>v?.holiday).map(([k])=>k);
-  console.log("[StaffPlan] sbLoadDailyStats returned holidays:", holidays, "caller:", new Error().stack.split("\n")[2]?.trim());
   return Object.keys(out).length ? out : null;
 }
 
@@ -333,8 +331,6 @@ async function sbDeleteStaff(staffId) {
 async function sbDeleteEntriesForDate(dateStr) {
   const sb = await getSB();
   const { error } = await sb.from("entries").delete().eq("date_str", dateStr);
-  if (error) console.error("[StaffPlan] Failed to delete entries for", dateStr, error);
-  else console.log("[StaffPlan] Deleted all entries for holiday date:", dateStr);
 }
 
 async function sbSaveStaff(staffArr) {
@@ -394,29 +390,10 @@ async function sbSaveDailyStats(statsObj) {
     date_str, data, updated_at: new Date().toISOString()
   }));
   if (!rows.length) return;
-  // Log holiday rows so we can debug persistence issues
-  const holidayRows = rows.filter(r => r.data && r.data.holiday);
-  if (holidayRows.length > 0) {
-    console.log("[StaffPlan] Saving holiday rows:", holidayRows.map(r => r.date_str));
-  }
   for (let i = 0; i < rows.length; i += 500) {
     const { error } = await sb.from("daily_stats").upsert(rows.slice(i, i+500), { onConflict: "date_str" });
     if (error) {
       console.error("[StaffPlan] daily_stats save error:", error);
-    } else if (holidayRows.length > 0) {
-      // Verify the holiday rows actually made it into the DB
-      const dates = holidayRows.map(r => r.date_str);
-      const { data: verify, error: verifyErr } = await sb.from("daily_stats")
-        .select("date_str, data")
-        .in("date_str", dates);
-      if (verifyErr) {
-        console.error("[StaffPlan] Verify read failed:", verifyErr);
-      } else {
-        const savedHolidays = (verify||[]).filter(r => r.data?.holiday).map(r => r.date_str);
-        console.log("[StaffPlan] DB verify — holidays confirmed in DB:", savedHolidays);
-        const missing = dates.filter(d => !savedHolidays.includes(d));
-        if (missing.length) console.error("[StaffPlan] DB verify — MISSING from DB:", missing);
-      }
     }
   }
 }
@@ -633,7 +610,7 @@ export default function StaffingApp() {
     (async () => {
       try {
         const [sbStaff, sbEntries, sbStats, sbNW, sbAlerts, sbPTO, sbNotes, sbVisits] = await Promise.all([
-          sbLoadStaff(), sbLoadEntries(), sbLoadDailyStats().then(d => { if(d) { const h=Object.entries(d).filter(([,v])=>v?.holiday).map(([k])=>k); console.log("[StaffPlan] Initial load holidays:", h); } return d; }),
+          sbLoadStaff(), sbLoadEntries(), sbLoadDailyStats(),
           sbLoadNonWorkTypes(), sbLoadAlertSettings(), sbLoadPTO(),
           sbLoadNotes(), sbLoadVisits(),
         ]);
@@ -670,7 +647,7 @@ export default function StaffingApp() {
           setEntries(prev => ({ ...prev, [`${r.staff_id}_${r.date_str}`]: r.segments || [] }));
         }
       },
-      () => { if (isSavingRef.current) { console.log("[StaffPlan] Realtime stats change suppressed (saving)"); return; } debounce("stats", async () => { console.log("[StaffPlan] Realtime reloading dailyStats from DB..."); const d=await sbLoadDailyStats(); if(d) { const rh=Object.entries(d).filter(([,v])=>v?.holiday).map(([k])=>k); console.log("[StaffPlan] Realtime setDailyStats with holidays:", rh); setDailyStats(d); } }); },
+      () => { if (isSavingRef.current) return; debounce("stats", async () => { const d=await sbLoadDailyStats(); if(d) setDailyStats(d); }); },
       () => { if (isSavingRef.current) return; debounce("visits", async () => { const d=await sbLoadVisits(); if(d) setVisitData(d); }); },
     );
     return () => { if (_realtimeChannel) getSB().then(sb => sb.removeChannel(_realtimeChannel)); };
@@ -686,16 +663,26 @@ export default function StaffingApp() {
     getSB().then(sb => {
       const ch = sb.channel("staffplan-presence", { config: { presence: { key: currentUser.id } } });
       presenceChannel.current = ch;
-      ch.on("presence", { event: "sync" }, () => {
+      const syncState = () => {
         const state = ch.presenceState();
         const users = {};
         Object.entries(state).forEach(([uid, arr]) => { if (arr[0]) users[uid] = arr[0]; });
         setOnlineUsers(users);
-      });
+      };
+      ch.on("presence", { event: "sync" }, syncState);
+      ch.on("presence", { event: "join" }, syncState);
+      ch.on("presence", { event: "leave" }, syncState);
       ch.subscribe(async status => {
         if (status === "SUBSCRIBED") {
-          await ch.track({ userId: currentUser.id, name: myName, initials: myInitials,
-            role: currentUser?.profile?.role || "viewer", tab: activeTab, color: myColor });
+          await ch.track({
+            userId: currentUser.id,
+            name: myName,
+            initials: myInitials,
+            role: currentUser?.profile?.role || "viewer",
+            tab: activeTab,
+            color: myColor,
+            online_at: new Date().toISOString(),
+          });
         }
       });
     });
@@ -725,8 +712,6 @@ export default function StaffingApp() {
     saveTimer.current = setTimeout(async () => {
       setSaveStatus("saving");
       isSavingRef.current = true; // block realtime reloads during save
-      const holidayDates = Object.entries(dailyStatsRef.current || {}).filter(([,v])=>v?.holiday).map(([k])=>k);
-      console.log("[StaffPlan] triggerSave firing. Holiday dates in state:", holidayDates);
       try {
         await Promise.all([
           sbSaveStaff(staffRef.current ?? newStaff),
@@ -4489,6 +4474,7 @@ function TimesheetTab({ staff, entries, weekStart, nonWorkTypes }) {
       return { rangeStart:fmt(s), rangeEnd:fmt(e) };
     }
     if (rangeType==="month") { const y=t.getFullYear(),m=t.getMonth(); return { rangeStart:fmt(new Date(y,m,1)), rangeEnd:fmt(new Date(y,m+1,0)) }; }
+    if (rangeType==="lastmonth") { const y=t.getFullYear(),m=t.getMonth()-1; const lm=m<0?11:m,ly=m<0?y-1:y; return { rangeStart:fmt(new Date(ly,lm,1)), rangeEnd:fmt(new Date(ly,lm+1,0)) }; }
     if (rangeType==="year") return { rangeStart:`${t.getFullYear()}-01-01`, rangeEnd:`${t.getFullYear()}-12-31` };
     return { rangeStart:customStart, rangeEnd:customEnd };
   }, [rangeType, customStart, customEnd]);
@@ -4589,7 +4575,7 @@ function TimesheetTab({ staff, entries, weekStart, nonWorkTypes }) {
       <div style={{background:"#fff",borderRadius:14,padding:14,border:"1px solid #e5e7eb",display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
         <div style={{fontSize:14,fontWeight:800,color:"#1e3a5f",flexShrink:0}}>🕐 Timesheets</div>
         <div style={{display:"flex",gap:3,background:"#f1f5f9",borderRadius:8,padding:3}}>
-          {[["week","This Week"],["lastweek","Last Week"],["month","This Month"],["year","This Year"],["custom","Custom"]].map(([v,l])=>(
+          {[["week","This Week"],["lastweek","Last Week"],["month","This Month"],["lastmonth","Last Month"],["year","This Year"],["custom","Custom"]].map(([v,l])=>(
             <button key={v} onClick={()=>setRangeType(v)} style={{padding:"4px 10px",borderRadius:6,fontSize:11,fontWeight:600,border:"none",cursor:"pointer",
               background:rangeType===v?"#fff":"transparent",color:rangeType===v?"#1e3a5f":"#6b7280",
               boxShadow:rangeType===v?"0 1px 3px rgba(0,0,0,0.1)":"none"}}>{l}</button>
