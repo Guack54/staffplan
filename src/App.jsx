@@ -198,6 +198,25 @@ async function trackEvent(userId, userEmail, eventType, payload = {}) {
   } catch (_) { /* best-effort — never throw */ }
 }
 
+async function sbLoadHolidays() {
+  try {
+    const sb = await getSB();
+    const { data } = await sb.from("alert_settings").select("data").eq("key", "holidays").single();
+    if (data?.data) return data.data; // { year: [ { name, date, floating } ] }
+    return {};
+  } catch(_) { return {}; }
+}
+
+async function sbSaveHolidays(holidays) {
+  try {
+    const sb = await getSB();
+    await sb.from("alert_settings").upsert(
+      { key: "holidays", data: holidays },
+      { onConflict: "key" }
+    );
+  } catch(_) {}
+}
+
 async function sbLoadCompetencies() {
   try {
     const sb = await getSB();
@@ -537,7 +556,9 @@ export default function StaffingApp() {
   const [staff, setStaff] = useState([]);
   const [nonWorkTypes, setNonWorkTypes] = useState(DEFAULT_NON_WORK);
   const [locations, setLocations] = useState(DEFAULT_LOCATIONS);
-  const [competencies, setCompetencies] = useState([]); // [{ id, name, color }]
+  const [competencies, setCompetencies] = useState([]);
+  const [holidays, setHolidays] = useState({}); // { "2026": [{name, date, confirmed}] }
+  const [showHolidayCalendar, setShowHolidayCalendar] = useState(false); // [{ id, name, color }]
   const [filterCompetencies, setFilterCompetencies] = useState([]); // ids — AND logic
   const [showCompetencyEditor, setShowCompetencyEditor] = useState(false);
   const [editingCell, setEditingCell] = useState(null);
@@ -589,6 +610,7 @@ export default function StaffingApp() {
   const userRole = currentUser?.profile?.role || "viewer";
   const canEdit = userRole === "admin" || userRole === "manager";
   const isAdmin = userRole === "admin";
+  const isStaffRole = userRole === "staff";
 
   // ── Check existing session on mount ──
   useEffect(() => {
@@ -621,8 +643,10 @@ export default function StaffingApp() {
         if (sbAlerts)  setAlertSettings(sbAlerts);
         const savedLocs = await loadFromStorage("staffplan:locations", DEFAULT_LOCATIONS);
         const savedComps = await sbLoadCompetencies();
+        const savedHolidays = await sbLoadHolidays();
         if (savedLocs) setLocations(savedLocs);
         if (savedComps && savedComps.length > 0) setCompetencies(savedComps);
+        if (savedHolidays && Object.keys(savedHolidays).length > 0) setHolidays(savedHolidays);
         if (sbPTO)     setPtoBalances(sbPTO);
         if (sbNotes)   setDayNotes(sbNotes);
         if (sbVisits)  setVisitData(sbVisits);
@@ -759,6 +783,7 @@ export default function StaffingApp() {
   const updateNonWorkTypes = useCallback((val) => { setNonWorkTypes(val); triggerSave(staff, entries, dailyStats, val, alertSettings, ptoBalances, dayNotes); }, [staff, entries, dailyStats, alertSettings, ptoBalances, dayNotes, triggerSave]);
   const updateLocations = useCallback((val) => { setLocations(val); saveToStorage("staffplan:locations", val); }, []);
   const updateCompetencies = useCallback((val) => { setCompetencies(val); sbSaveCompetencies(val); }, []);
+  const updateHolidays = useCallback((val) => { setHolidays(val); sbSaveHolidays(val); }, []);
   const updateAlertSettings = useCallback((val) => { setAlertSettings(val); triggerSave(staff, entries, dailyStats, nonWorkTypes, val, ptoBalances, dayNotes); }, [staff, entries, dailyStats, nonWorkTypes, ptoBalances, dayNotes, triggerSave]);
   const updatePtoBalances = useCallback((val) => { setPtoBalances(val); triggerSave(staff, entries, dailyStats, nonWorkTypes, alertSettings, val, dayNotes); }, [staff, entries, dailyStats, nonWorkTypes, alertSettings, dayNotes, triggerSave]);
   const updateDayNotes = useCallback((val) => { setDayNotes(val); triggerSave(staff, entries, dailyStats, nonWorkTypes, alertSettings, ptoBalances, val); }, [staff, entries, dailyStats, nonWorkTypes, alertSettings, ptoBalances, triggerSave]);
@@ -1122,11 +1147,11 @@ export default function StaffingApp() {
   const VIEW_TABS = [
     { id:"day",       icon:"☀️", label:"Day"        },
     { id:"grid",      icon:"📅", label:"Week"       },
-    { id:"master",    icon:"📋", label:"Master"     },
-    { id:"month",     icon:"🗓", label:"Month"      },
-    { id:"year",      icon:"📆", label:"Year"       },
-    { id:"summary",   icon:"📊", label:"Dept Stats & Visits" },
-    { id:"timesheet", icon:"🕐", label:"Timesheets" },
+    { id:"master",    icon:"📋", label:"Master",    staffHidden: true },
+    { id:"month",     icon:"🗓", label:"Month",     staffHidden: true },
+    { id:"year",      icon:"📆", label:"Year",      staffHidden: true },
+    { id:"summary",   icon:"📊", label:"Dept Stats & Visits", staffHidden: true },
+    { id:"timesheet", icon:"🕐", label:"Timesheets",staffHidden: true },
     { id:"analytics", icon:"🔍", label:"Analytics", adminOnly: true },
   ];
 
@@ -1204,7 +1229,7 @@ export default function StaffingApp() {
 
         {/* View tabs — always visible */}
         <div style={{display:"flex",gap:3,background:"rgba(255,255,255,0.08)",borderRadius:10,padding:3,flexWrap:"wrap"}}>
-          {VIEW_TABS.filter(tab => !tab.adminOnly || userRole === "admin").map(tab => (
+          {VIEW_TABS.filter(tab => (!tab.adminOnly || userRole === "admin") && (!tab.staffHidden || !isStaffRole)).map(tab => (
             <button key={tab.id} onClick={() => {
               const duration = Math.round((Date.now() - tabEnteredAt.current) / 1000);
               trackEvent(currentUser.id, currentUser.email, "tab_exit", { tab: activeTab, duration_seconds: duration });
@@ -1262,11 +1287,11 @@ export default function StaffingApp() {
 
           {/* ⋯ Menu */}
           <div style={{position:"relative"}} ref={menuRef}>
-            <button onClick={() => setMenuOpen(o => !o)} style={{
+            {!isStaffRole && <button onClick={() => setMenuOpen(o => !o)} style={{
               padding:"6px 14px",borderRadius:8,background:menuOpen?"#fff":"rgba(255,255,255,0.12)",
               border:"1px solid rgba(255,255,255,0.2)",color:menuOpen?"#1e3a5f":"#e2e8f0",
               cursor:"pointer",fontSize:13,fontWeight:700
-            }}>☰ Menu</button>
+            }}>☰ Menu</button>}
             {menuOpen && (
               <div onClick={() => setMenuOpen(false)} style={{
                 position:"absolute",right:0,top:"calc(100% + 6px)",background:"#fff",borderRadius:12,
@@ -1285,6 +1310,7 @@ export default function StaffingApp() {
                   isAdmin && { icon:"⚙", label:"Non-Work Codes",     color:"#8b5cf6", action:()=>setShowNonWorkEditor(true),  desc:"Create and manage leave codes like VAC, SICK, PFL and their colors" },
                   isAdmin && { icon:"📍", label:"Locations",             color:"#0ea5e9", action:()=>setShowLocationEditor(true),  desc:"Define locations within each team that staff can be assigned to" },
                   isAdmin && { icon:"🎯", label:"Competencies",           color:"#10b981", action:()=>setShowCompetencyEditor(true), desc:"Define clinical competency areas staff can be qualified in" },
+                  isAdmin && { icon:"📅", label:"Holiday Calendar",        color:"#f59e0b", action:()=>setShowHolidayCalendar(true),  desc:"Manage annual holidays — mark them on the calendar with one click" },
                   isAdmin && { icon:"🔔", label:"Alert Settings",     color:"#f59e0b", action:()=>setShowAlertsEditor(true),   desc:"Set FTE and census thresholds for warnings" },
                   isAdmin && { icon:"👤", label:"Manage Users",       color:"#1e3a5f", action:()=>setShowUserManager(true),    desc:"Add users and control who can view or edit the schedule" },
                   { icon:"🔐", label:"Change Password",               color:"#374151", action:()=>setShowPwManager(true),      desc:"Update your account password" },
@@ -1387,7 +1413,7 @@ export default function StaffingApp() {
           <DayView date={dayView} staff={staff} getEntry={getEntry} setEntrySegments={setEntrySegments}
             getDailyStats={getDailyStats} setDailyStat={setDailyStat} setHoliday={setHoliday} getDayFTE={getDayFTE}
             nwMap={nwMap} nonWorkTypes={nonWorkTypes} filterTeam={filterTeam} setFilterTeam={setFilterTeam}
-            dayNotes={dayNotes} updateDayNotes={updateDayNotes} getDayAlerts={getDayAlerts} canEdit={canEdit} />
+            dayNotes={dayNotes} updateDayNotes={updateDayNotes} getDayAlerts={getDayAlerts} canEdit={canEdit} isStaffRole={isStaffRole} />
         )}
         {activeTab==="grid" && (
           <WeekGrid filteredStaff={filteredStaff} weekDates={weekDates} getEntry={getEntry} getDayFTE={getDayFTE}
@@ -1396,7 +1422,7 @@ export default function StaffingApp() {
             updateStaff={updateStaff} staff={staff} compactMode={compactMode} getDayAlerts={getDayAlerts}
             dayNotes={dayNotes} updateDayNotes={updateDayNotes} alertSettings={alertSettings}
             getDailyStats={getDailyStats} setDailyStat={setDailyStat} setHoliday={setHoliday} todayStr={todayStr}
-            canEdit={canEdit} competencies={competencies} filterCompetencies={filterCompetencies} setFilterCompetencies={setFilterCompetencies} />
+            canEdit={canEdit} competencies={competencies} filterCompetencies={filterCompetencies} setFilterCompetencies={setFilterCompetencies} isStaffRole={isStaffRole} />
         )}
         {activeTab==="month" && (
           <MonthView year={monthView.year} month={monthView.month} staff={staff} getEntry={getEntry}
@@ -1504,6 +1530,7 @@ export default function StaffingApp() {
       {showUserManager && <UserManagerModal currentUser={currentUser} onClose={()=>setShowUserManager(false)} />}
       {showLocationEditor && <LocationEditor locations={locations} updateLocations={updateLocations} onClose={()=>setShowLocationEditor(false)} />}
       {showCompetencyEditor && <CompetencyEditor competencies={competencies} updateCompetencies={updateCompetencies} onClose={()=>setShowCompetencyEditor(false)} />}
+      {showHolidayCalendar && <HolidayCalendarEditor holidays={holidays} updateHolidays={updateHolidays} setHoliday={setHoliday} onClose={()=>setShowHolidayCalendar(false)} />}
       {menuOpen && <div style={{position:"fixed",inset:0,zIndex:499}} onClick={()=>setMenuOpen(false)} />}
     </div>
   );
@@ -1514,7 +1541,7 @@ const navBtn = { padding:"5px 12px",borderRadius:8,background:"#f1f5f9",border:"
 const todayBtn = { padding:"5px 12px",borderRadius:8,background:"#eff6ff",border:"1px solid #bfdbfe",cursor:"pointer",fontSize:12,fontWeight:600,color:"#1d4ed8" };
 
 // ─── Daily View ──────────────────────────────────────────────────────────────
-function DayView({ date, staff, getEntry, setEntrySegments, getDailyStats, setDailyStat, setHoliday, getDayFTE, nwMap, nonWorkTypes, filterTeam, setFilterTeam, dayNotes, updateDayNotes, getDayAlerts, canEdit=false }) {
+function DayView({ date, staff, getEntry, setEntrySegments, getDailyStats, setDailyStat, setHoliday, getDayFTE, nwMap, nonWorkTypes, filterTeam, setFilterTeam, dayNotes, updateDayNotes, getDayAlerts, canEdit=false, isStaffRole=false }) {
   const ds = fmt(date);
   const stats = getDailyStats(ds);
   const fte = getDayFTE(ds);
@@ -1751,7 +1778,7 @@ function DayView({ date, staff, getEntry, setEntrySegments, getDailyStats, setDa
                         <span style={{ fontSize: 9, fontWeight: 700, color: "#fff", whiteSpace: "nowrap", padding: "0 5px", flexShrink: 0 }}>
                           {info.totalHrs}h
                           {info.segs.length > 1 && " split"}
-                          {nwSegs.length > 0 && " · " + nwSegs[0].nonWork}
+                          {nwSegs.length > 0 && !isStaffRole && " · " + nwSegs[0].nonWork}
                         </span>
                         {info.segs.filter(e=>e.location).map((e,li) => {
                           const tc2 = TEAM_COLORS[e.team||s.team];
@@ -1845,7 +1872,9 @@ function DayView({ date, staff, getEntry, setEntrySegments, getDailyStats, setDa
                         <span style={{ fontSize: 12, fontWeight: 600, color: "#374151" }}>{s.name}</span>
                       </div>
                       <div style={{ display: "flex", gap: 4, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}>
-                        {nwSegs.map((e, i) => {
+                        {isStaffRole ? (
+                          <span style={{ fontSize: 10, padding: "1px 7px", borderRadius: 99, background: "#f3f4f6", color: "#6b7280", fontWeight: 700 }}>Out</span>
+                        ) : nwSegs.map((e, i) => {
                           const nwInfo = nwMap[e.nonWork];
                           return nwInfo ? (
                             <span key={i} style={{ fontSize: 10, padding: "1px 7px", borderRadius: 99, background: nwInfo.color + "22", color: nwInfo.color, fontWeight: 700 }}>
@@ -2434,6 +2463,7 @@ function UserManagerModal({ currentUser, onClose }) {
                   {u.id !== currentUser?.id && <>
                     <select value={u.role} onChange={e=>updateRole(u.id,e.target.value)}
                       style={{padding:"4px 8px",borderRadius:7,border:"1px solid #e5e7eb",fontSize:11,fontWeight:600,background:"#fff",cursor:"pointer"}}>
+                      <option value="staff">Staff (schedule view only)</option>
                       <option value="viewer">Viewer</option>
                       <option value="manager">Manager</option>
                       <option value="admin">Admin</option>
@@ -2467,6 +2497,7 @@ function UserManagerModal({ currentUser, onClose }) {
             <div>
               <label style={{fontSize:10,fontWeight:600,color:"#6b7280",display:"block",marginBottom:3}}>Role</label>
               <select value={newRole} onChange={e=>setNewRole(e.target.value)} style={{...inp,fontSize:12,cursor:"pointer"}}>
+                <option value="staff">Staff (Day + Week only)</option>
                 <option value="viewer">Viewer (read only)</option>
                 <option value="manager">Manager (can edit)</option>
                 <option value="admin">Admin (full access)</option>
@@ -2723,7 +2754,7 @@ function MismatchRow({ item }) {
 }
 
 // ─── Week Grid ────────────────────────────────────────────────────────────────
-function WeekGrid({ filteredStaff, weekDates, getEntry, getDayFTE, nwMap, setEditingCell, setDrillDay, editingName, setEditingName, tempName, setTempName, updateStaff, staff, compactMode, getDayAlerts, dayNotes, updateDayNotes, alertSettings, getDailyStats, setDailyStat, setHoliday, todayStr, canEdit, competencies=[], filterCompetencies=[], setFilterCompetencies }) {
+function WeekGrid({ filteredStaff, weekDates, getEntry, getDayFTE, nwMap, setEditingCell, setDrillDay, editingName, setEditingName, tempName, setTempName, updateStaff, staff, compactMode, getDayAlerts, dayNotes, updateDayNotes, alertSettings, getDailyStats, setDailyStat, setHoliday, todayStr, canEdit, competencies=[], filterCompetencies=[], setFilterCompetencies, isStaffRole=false }) {
   const [confirmHolidayDs, setConfirmHolidayDs] = useState(null);
   const [showHourAlerts, setShowHourAlerts] = useState(false);
 
@@ -2961,26 +2992,28 @@ function WeekGrid({ filteredStaff, weekDates, getEntry, getDayFTE, nwMap, setEdi
                         const mixed = hrs > 0 && nw;    // partial day — working + NW
 
                         if (nonWorkOnly) {
-                          // Full non-work day: show code prominently, no team label
                           return (
-                            <div key={si} style={{display:"flex",alignItems:"center",justifyContent:"center",gap:3,padding:"2px 4px",borderRadius:4,background:nw.color+"18",border:"1px solid "+nw.color+"44"}}>
-                              <span style={{fontSize:12,fontWeight:800,color:nw.color}}>{nw.code}</span>
-                              <span style={{fontSize:10,color:nw.color+"bb",fontWeight:600}}>{nwHrs||8}h</span>
+                            <div key={si} style={{display:"flex",alignItems:"center",justifyContent:"center",gap:3,padding:"2px 4px",borderRadius:4,
+                              background:isStaffRole?"#f3f4f6":nw.color+"18",
+                              border:"1px solid "+(isStaffRole?"#e5e7eb":nw.color+"44")}}>
+                              <span style={{fontSize:11,fontWeight:700,color:isStaffRole?"#6b7280":nw.color}}>{isStaffRole?"Out":nw.code}</span>
+                              {!isStaffRole && <span style={{fontSize:10,color:nw.color+"bb",fontWeight:600}}>{nwHrs||8}h</span>}
                             </div>
                           );
                         }
                         if (mixed) {
-                          // Partial day: show hours + team, then NW hours + code
                           return (
                             <div key={si} style={{display:"flex",flexDirection:"column",gap:2,padding:"1px 3px",borderRadius:4,background:tc?.bg||"#f0f7ff",borderLeft:"2px solid "+(tc?.dot||"#3b82f6")}}>
                               <div style={{display:"flex",alignItems:"center",gap:3}}>
                                 <span style={{fontSize:11,fontWeight:700,color:"#1e3a5f",flexShrink:0}}>{hrs}h</span>
                                 <span style={{fontSize:9,color:tc?.text||"#1e40af",fontWeight:600,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",flex:1}}>{e.team||s.team}</span>
                               </div>
-                              <div style={{display:"flex",alignItems:"center",gap:2,padding:"1px 3px",borderRadius:3,background:nw.color+"18"}}>
-                                <span style={{fontSize:9,fontWeight:800,color:nw.color}}>{nw.code}</span>
-                                <span style={{fontSize:9,color:nw.color+"bb",fontWeight:600}}>{nwHrs||8}h</span>
-                              </div>
+                              {!isStaffRole && (
+                                <div style={{display:"flex",alignItems:"center",gap:2,padding:"1px 3px",borderRadius:3,background:nw.color+"18"}}>
+                                  <span style={{fontSize:9,fontWeight:800,color:nw.color}}>{nw.code}</span>
+                                  <span style={{fontSize:9,color:nw.color+"bb",fontWeight:600}}>{nwHrs||8}h</span>
+                                </div>
+                              )}
                             </div>
                           );
                         }
@@ -6206,6 +6239,200 @@ create policy "insert own events" on usage_events
 -- Allow all authenticated users to read (admin sees all)
 create policy "read all events" on usage_events
   for select using (auth.role() = 'authenticated');`}</pre>
+      </div>
+    </div>
+  );
+}
+
+// ─── Holiday Calendar Editor ──────────────────────────────────────────────────
+const FEDERAL_HOLIDAYS = [
+  { name: "New Year's Day",       month: 1,  day: 1,   floating: false },
+  { name: "MLK Jr. Day",          month: 1,  day: null, floating: true, desc: "3rd Monday in January" },
+  { name: "Presidents' Day",      month: 2,  day: null, floating: true, desc: "3rd Monday in February" },
+  { name: "Memorial Day",         month: 5,  day: null, floating: true, desc: "Last Monday in May" },
+  { name: "Juneteenth",           month: 6,  day: 19,  floating: false },
+  { name: "Independence Day",     month: 7,  day: 4,   floating: false },
+  { name: "Labor Day",            month: 9,  day: null, floating: true, desc: "1st Monday in September" },
+  { name: "Columbus Day",         month: 10, day: null, floating: true, desc: "2nd Monday in October" },
+  { name: "Veterans Day",         month: 11, day: 11,  floating: false },
+  { name: "Thanksgiving",         month: 11, day: null, floating: true, desc: "4th Thursday in November" },
+  { name: "Christmas Day",        month: 12, day: 25,  floating: false },
+];
+
+function getFloatingDate(year, month, rule) {
+  // Returns date string for floating holidays
+  const d = new Date(year, month - 1, 1);
+  const dow = d.getDay(); // day of week of first day
+  if (rule === "3rd Monday January")  { const first = dow <= 1 ? 1 + (1 - dow + 7) % 7 : 1 + (8 - dow); return `${year}-01-${String(first + 14).padStart(2,"0")}`; }
+  if (rule === "3rd Monday February") { const first = dow <= 1 ? 1 + (1 - dow + 7) % 7 : 1 + (8 - dow); return `${year}-02-${String(first + 14).padStart(2,"0")}`; }
+  if (rule === "Last Monday May")     { const last = new Date(year, 4, 31); while (last.getDay() !== 1) last.setDate(last.getDate()-1); return `${year}-05-${String(last.getDate()).padStart(2,"0")}`; }
+  if (rule === "1st Monday September"){ const first = dow <= 1 ? 1 + (1 - dow + 7) % 7 : 1 + (8 - dow); return `${year}-09-${String(first).padStart(2,"0")}`; }
+  if (rule === "2nd Monday October")  { const d2 = new Date(year, 9, 1); while(d2.getDay()!==1) d2.setDate(d2.getDate()+1); d2.setDate(d2.getDate()+7); return `${year}-10-${String(d2.getDate()).padStart(2,"0")}`; }
+  if (rule === "4th Thursday November"){ const d2 = new Date(year, 10, 1); while(d2.getDay()!==4) d2.setDate(d2.getDate()+1); d2.setDate(d2.getDate()+21); return `${year}-11-${String(d2.getDate()).padStart(2,"0")}`; }
+  return null;
+}
+
+function HolidayCalendarEditor({ holidays, updateHolidays, setHoliday, onClose }) {
+  const currentYear = new Date().getFullYear();
+  const [year, setYear] = useState(String(currentYear));
+  const [items, setItems] = useState(() => {
+    const y = String(currentYear);
+    return holidays[y] ? holidays[y].map(h=>({...h})) : [];
+  });
+  const [newName, setNewName] = useState("");
+  const [newDate, setNewDate] = useState("");
+  const [confirmApply, setConfirmApply] = useState(null); // holiday to confirm applying
+
+  const switchYear = (y) => {
+    setYear(y);
+    setItems(holidays[y] ? holidays[y].map(h=>({...h})) : []);
+  };
+
+  const addFromTemplate = (tpl) => {
+    let date;
+    if (!tpl.floating) {
+      date = `${year}-${String(tpl.month).padStart(2,"0")}-${String(tpl.day).padStart(2,"0")}`;
+    } else {
+      const ruleMap = {
+        "MLK Jr. Day": "3rd Monday January",
+        "Presidents' Day": "3rd Monday February",
+        "Memorial Day": "Last Monday May",
+        "Labor Day": "1st Monday September",
+        "Columbus Day": "2nd Monday October",
+        "Thanksgiving": "4th Thursday November",
+      };
+      date = getFloatingDate(Number(year), tpl.month, ruleMap[tpl.name]) || "";
+    }
+    if (items.some(i => i.date === date)) return; // already added
+    setItems(prev => [...prev, { name: tpl.name, date, floating: tpl.floating }]);
+  };
+
+  const addCustom = () => {
+    if (!newName.trim() || !newDate) return;
+    if (items.some(i => i.date === newDate)) return;
+    setItems(prev => [...prev, { name: newName.trim(), date: newDate, floating: false }]);
+    setNewName(""); setNewDate("");
+  };
+
+  const removeItem = (date) => setItems(prev => prev.filter(i => i.date !== date));
+
+  const save = () => {
+    const next = { ...holidays, [year]: items };
+    updateHolidays(next);
+    onClose();
+  };
+
+  const applyHoliday = (h) => {
+    setHoliday(h.date, true);
+    setConfirmApply(null);
+  };
+
+  const sorted = [...items].sort((a,b) => a.date.localeCompare(b.date));
+  const templateAdded = new Set(items.map(i=>i.name));
+
+  return (
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.5)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:3000}} onClick={onClose}>
+      <div style={{background:"#fff",borderRadius:18,padding:28,width:560,maxHeight:"88vh",overflow:"auto",boxShadow:"0 25px 60px rgba(0,0,0,0.22)"}} onClick={e=>e.stopPropagation()}>
+
+        {/* Header */}
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
+          <div style={{fontSize:17,fontWeight:800,color:"#1e3a5f"}}>📅 Holiday Calendar</div>
+          <button onClick={onClose} style={{background:"#f3f4f6",border:"none",borderRadius:8,padding:"5px 12px",cursor:"pointer",fontWeight:700}}>✕</button>
+        </div>
+        <div style={{fontSize:12,color:"#6b7280",marginBottom:16}}>
+          Define holidays per year. Click <b>Apply to Schedule</b> to mark the day as a holiday and clear staff entries for that date.
+        </div>
+
+        {/* Year selector */}
+        <div style={{display:"flex",gap:6,marginBottom:18,alignItems:"center"}}>
+          <span style={{fontSize:12,fontWeight:700,color:"#374151"}}>Year:</span>
+          {[currentYear-1, currentYear, currentYear+1].map(y => (
+            <button key={y} onClick={()=>switchYear(String(y))} style={{
+              padding:"4px 14px",borderRadius:8,fontSize:12,fontWeight:700,cursor:"pointer",
+              background:year===String(y)?"#1e3a5f":"#f3f4f6",
+              color:year===String(y)?"#fff":"#6b7280",border:"none"
+            }}>{y}</button>
+          ))}
+        </div>
+
+        {/* Federal holiday templates */}
+        <div style={{marginBottom:16}}>
+          <div style={{fontSize:11,fontWeight:700,color:"#9ca3af",textTransform:"uppercase",letterSpacing:"0.05em",marginBottom:8}}>Add from Federal Holidays</div>
+          <div style={{display:"flex",gap:5,flexWrap:"wrap"}}>
+            {FEDERAL_HOLIDAYS.map(tpl => {
+              const added = templateAdded.has(tpl.name);
+              return (
+                <button key={tpl.name} onClick={()=>!added&&addFromTemplate(tpl)}
+                  title={tpl.floating ? tpl.desc : ""}
+                  style={{
+                    padding:"3px 10px",borderRadius:99,fontSize:11,fontWeight:600,cursor:added?"default":"pointer",
+                    background:added?"#f0fdf4":"#f3f4f6",
+                    color:added?"#15803d":"#374151",
+                    border:"1px solid "+(added?"#86efac":"#e5e7eb"),
+                    opacity:added?0.7:1
+                  }}>
+                  {added?"✓ ":""}{tpl.name}{tpl.floating?" *":""}
+                </button>
+              );
+            })}
+          </div>
+          <div style={{fontSize:9,color:"#9ca3af",marginTop:5}}>* Floating date — calculated automatically for {year}</div>
+        </div>
+
+        {/* This year's holidays */}
+        <div style={{marginBottom:16}}>
+          <div style={{fontSize:11,fontWeight:700,color:"#9ca3af",textTransform:"uppercase",letterSpacing:"0.05em",marginBottom:8}}>
+            {year} Holidays ({items.length})
+          </div>
+          {sorted.length === 0 ? (
+            <div style={{padding:"16px",textAlign:"center",color:"#9ca3af",fontSize:12,background:"#f9fafb",borderRadius:8}}>
+              No holidays defined for {year} yet
+            </div>
+          ) : (
+            <div style={{display:"flex",flexDirection:"column",gap:5}}>
+              {sorted.map(h => (
+                <div key={h.date} style={{display:"flex",alignItems:"center",gap:8,padding:"8px 12px",borderRadius:10,background:"#f9fafb",border:"1px solid #f3f4f6"}}>
+                  <div style={{flex:1}}>
+                    <div style={{fontSize:13,fontWeight:700,color:"#111827"}}>{h.name}</div>
+                    <div style={{fontSize:11,color:"#6b7280"}}>
+                      {new Date(h.date+"T12:00:00").toLocaleDateString("en-US",{weekday:"long",month:"long",day:"numeric",year:"numeric"})}
+                    </div>
+                  </div>
+                  {confirmApply?.date === h.date ? (
+                    <div style={{display:"flex",gap:5,alignItems:"center"}}>
+                      <span style={{fontSize:11,color:"#dc2626",fontWeight:600}}>Mark as holiday + clear entries?</span>
+                      <button onClick={()=>applyHoliday(h)} style={{padding:"3px 10px",borderRadius:6,background:"#dc2626",color:"#fff",border:"none",fontSize:11,fontWeight:700,cursor:"pointer"}}>Yes</button>
+                      <button onClick={()=>setConfirmApply(null)} style={{padding:"3px 10px",borderRadius:6,background:"#f3f4f6",border:"none",fontSize:11,fontWeight:600,cursor:"pointer"}}>Cancel</button>
+                    </div>
+                  ) : (
+                    <button onClick={()=>setConfirmApply(h)} style={{padding:"3px 10px",borderRadius:7,background:"#eff6ff",border:"1px solid #bfdbfe",color:"#1d4ed8",fontSize:11,fontWeight:700,cursor:"pointer",whiteSpace:"nowrap"}}>
+                      Apply to Schedule
+                    </button>
+                  )}
+                  <button onClick={()=>removeItem(h.date)} style={{background:"#fee2e2",border:"none",borderRadius:6,color:"#dc2626",fontWeight:700,cursor:"pointer",padding:"3px 8px",fontSize:11}}>✕</button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Add custom */}
+        <div style={{borderTop:"1px solid #f3f4f6",paddingTop:14,marginBottom:16}}>
+          <div style={{fontSize:11,fontWeight:700,color:"#9ca3af",textTransform:"uppercase",letterSpacing:"0.05em",marginBottom:8}}>Add Custom Holiday</div>
+          <div style={{display:"flex",gap:8,alignItems:"center"}}>
+            <input value={newName} onChange={e=>setNewName(e.target.value)} placeholder="Holiday name"
+              onKeyDown={e=>e.key==="Enter"&&addCustom()}
+              style={{flex:1,border:"1px solid #e5e7eb",borderRadius:8,padding:"6px 10px",fontSize:13}} />
+            <input type="date" value={newDate} onChange={e=>setNewDate(e.target.value)}
+              style={{border:"1px solid #e5e7eb",borderRadius:8,padding:"6px 8px",fontSize:13}} />
+            <button onClick={addCustom} style={{padding:"6px 14px",borderRadius:8,background:"#1e3a5f",color:"#fff",border:"none",fontWeight:700,fontSize:13,cursor:"pointer"}}>+ Add</button>
+          </div>
+        </div>
+
+        <div style={{display:"flex",gap:10,justifyContent:"flex-end"}}>
+          <button onClick={onClose} style={{padding:"8px 20px",borderRadius:9,background:"#f3f4f6",border:"none",fontSize:13,fontWeight:600,cursor:"pointer"}}>Cancel</button>
+          <button onClick={save} style={{padding:"8px 20px",borderRadius:9,background:"#1e3a5f",color:"#fff",border:"none",fontSize:13,fontWeight:700,cursor:"pointer"}}>Save</button>
+        </div>
       </div>
     </div>
   );
