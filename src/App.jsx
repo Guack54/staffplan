@@ -6245,33 +6245,6 @@ create policy "read all events" on usage_events
 }
 
 // ─── Holiday Calendar Editor ──────────────────────────────────────────────────
-const FEDERAL_HOLIDAYS = [
-  { name: "New Year's Day",       month: 1,  day: 1,   floating: false },
-  { name: "MLK Jr. Day",          month: 1,  day: null, floating: true, desc: "3rd Monday in January" },
-  { name: "Presidents' Day",      month: 2,  day: null, floating: true, desc: "3rd Monday in February" },
-  { name: "Memorial Day",         month: 5,  day: null, floating: true, desc: "Last Monday in May" },
-  { name: "Juneteenth",           month: 6,  day: 19,  floating: false },
-  { name: "Independence Day",     month: 7,  day: 4,   floating: false },
-  { name: "Labor Day",            month: 9,  day: null, floating: true, desc: "1st Monday in September" },
-  { name: "Columbus Day",         month: 10, day: null, floating: true, desc: "2nd Monday in October" },
-  { name: "Veterans Day",         month: 11, day: 11,  floating: false },
-  { name: "Thanksgiving",         month: 11, day: null, floating: true, desc: "4th Thursday in November" },
-  { name: "Christmas Day",        month: 12, day: 25,  floating: false },
-];
-
-function getFloatingDate(year, month, rule) {
-  // Returns date string for floating holidays
-  const d = new Date(year, month - 1, 1);
-  const dow = d.getDay(); // day of week of first day
-  if (rule === "3rd Monday January")  { const first = dow <= 1 ? 1 + (1 - dow + 7) % 7 : 1 + (8 - dow); return `${year}-01-${String(first + 14).padStart(2,"0")}`; }
-  if (rule === "3rd Monday February") { const first = dow <= 1 ? 1 + (1 - dow + 7) % 7 : 1 + (8 - dow); return `${year}-02-${String(first + 14).padStart(2,"0")}`; }
-  if (rule === "Last Monday May")     { const last = new Date(year, 4, 31); while (last.getDay() !== 1) last.setDate(last.getDate()-1); return `${year}-05-${String(last.getDate()).padStart(2,"0")}`; }
-  if (rule === "1st Monday September"){ const first = dow <= 1 ? 1 + (1 - dow + 7) % 7 : 1 + (8 - dow); return `${year}-09-${String(first).padStart(2,"0")}`; }
-  if (rule === "2nd Monday October")  { const d2 = new Date(year, 9, 1); while(d2.getDay()!==1) d2.setDate(d2.getDate()+1); d2.setDate(d2.getDate()+7); return `${year}-10-${String(d2.getDate()).padStart(2,"0")}`; }
-  if (rule === "4th Thursday November"){ const d2 = new Date(year, 10, 1); while(d2.getDay()!==4) d2.setDate(d2.getDate()+1); d2.setDate(d2.getDate()+21); return `${year}-11-${String(d2.getDate()).padStart(2,"0")}`; }
-  return null;
-}
-
 function HolidayCalendarEditor({ holidays, updateHolidays, setHoliday, onClose }) {
   const currentYear = new Date().getFullYear();
   const [year, setYear] = useState(String(currentYear));
@@ -6281,44 +6254,24 @@ function HolidayCalendarEditor({ holidays, updateHolidays, setHoliday, onClose }
   });
   const [newName, setNewName] = useState("");
   const [newDate, setNewDate] = useState("");
-  const [confirmApply, setConfirmApply] = useState(null); // holiday to confirm applying
+  const [confirmApply, setConfirmApply] = useState(null);
 
   const switchYear = (y) => {
     setYear(y);
     setItems(holidays[y] ? holidays[y].map(h=>({...h})) : []);
   };
 
-  const addFromTemplate = (tpl) => {
-    let date;
-    if (!tpl.floating) {
-      date = `${year}-${String(tpl.month).padStart(2,"0")}-${String(tpl.day).padStart(2,"0")}`;
-    } else {
-      const ruleMap = {
-        "MLK Jr. Day": "3rd Monday January",
-        "Presidents' Day": "3rd Monday February",
-        "Memorial Day": "Last Monday May",
-        "Labor Day": "1st Monday September",
-        "Columbus Day": "2nd Monday October",
-        "Thanksgiving": "4th Thursday November",
-      };
-      date = getFloatingDate(Number(year), tpl.month, ruleMap[tpl.name]) || "";
-    }
-    if (items.some(i => i.date === date)) return; // already added
-    setItems(prev => [...prev, { name: tpl.name, date, floating: tpl.floating }]);
-  };
-
-  const addCustom = () => {
+  const addHoliday = () => {
     if (!newName.trim() || !newDate) return;
     if (items.some(i => i.date === newDate)) return;
-    setItems(prev => [...prev, { name: newName.trim(), date: newDate, floating: false }]);
+    setItems(prev => [...prev, { name: newName.trim(), date: newDate }]);
     setNewName(""); setNewDate("");
   };
 
   const removeItem = (date) => setItems(prev => prev.filter(i => i.date !== date));
 
   const save = () => {
-    const next = { ...holidays, [year]: items };
-    updateHolidays(next);
+    updateHolidays({ ...holidays, [year]: items });
     onClose();
   };
 
@@ -6328,23 +6281,21 @@ function HolidayCalendarEditor({ holidays, updateHolidays, setHoliday, onClose }
   };
 
   const sorted = [...items].sort((a,b) => a.date.localeCompare(b.date));
-  const templateAdded = new Set(items.map(i=>i.name));
 
   return (
     <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.5)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:3000}} onClick={onClose}>
-      <div style={{background:"#fff",borderRadius:18,padding:28,width:560,maxHeight:"88vh",overflow:"auto",boxShadow:"0 25px 60px rgba(0,0,0,0.22)"}} onClick={e=>e.stopPropagation()}>
+      <div style={{background:"#fff",borderRadius:18,padding:28,width:520,maxHeight:"85vh",overflow:"auto",boxShadow:"0 25px 60px rgba(0,0,0,0.22)"}} onClick={e=>e.stopPropagation()}>
 
-        {/* Header */}
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
           <div style={{fontSize:17,fontWeight:800,color:"#1e3a5f"}}>📅 Holiday Calendar</div>
           <button onClick={onClose} style={{background:"#f3f4f6",border:"none",borderRadius:8,padding:"5px 12px",cursor:"pointer",fontWeight:700}}>✕</button>
         </div>
         <div style={{fontSize:12,color:"#6b7280",marginBottom:16}}>
-          Define holidays per year. Click <b>Apply to Schedule</b> to mark the day as a holiday and clear staff entries for that date.
+          Define holidays per year. Use <b>Apply to Schedule</b> to mark a day as a holiday and clear staff entries for that date.
         </div>
 
         {/* Year selector */}
-        <div style={{display:"flex",gap:6,marginBottom:18,alignItems:"center"}}>
+        <div style={{display:"flex",gap:6,marginBottom:20,alignItems:"center"}}>
           <span style={{fontSize:12,fontWeight:700,color:"#374151"}}>Year:</span>
           {[currentYear-1, currentYear, currentYear+1].map(y => (
             <button key={y} onClick={()=>switchYear(String(y))} style={{
@@ -6355,81 +6306,66 @@ function HolidayCalendarEditor({ holidays, updateHolidays, setHoliday, onClose }
           ))}
         </div>
 
-        {/* Federal holiday templates */}
-        <div style={{marginBottom:16}}>
-          <div style={{fontSize:11,fontWeight:700,color:"#9ca3af",textTransform:"uppercase",letterSpacing:"0.05em",marginBottom:8}}>Add from Federal Holidays</div>
-          <div style={{display:"flex",gap:5,flexWrap:"wrap"}}>
-            {FEDERAL_HOLIDAYS.map(tpl => {
-              const added = templateAdded.has(tpl.name);
-              return (
-                <button key={tpl.name} onClick={()=>!added&&addFromTemplate(tpl)}
-                  title={tpl.floating ? tpl.desc : ""}
-                  style={{
-                    padding:"3px 10px",borderRadius:99,fontSize:11,fontWeight:600,cursor:added?"default":"pointer",
-                    background:added?"#f0fdf4":"#f3f4f6",
-                    color:added?"#15803d":"#374151",
-                    border:"1px solid "+(added?"#86efac":"#e5e7eb"),
-                    opacity:added?0.7:1
-                  }}>
-                  {added?"✓ ":""}{tpl.name}{tpl.floating?" *":""}
-                </button>
-              );
-            })}
+        {/* Add holiday */}
+        <div style={{background:"#f8fafc",borderRadius:10,padding:"14px 16px",marginBottom:16,border:"1px solid #e5e7eb"}}>
+          <div style={{fontSize:12,fontWeight:700,color:"#374151",marginBottom:10}}>Add Holiday</div>
+          <div style={{display:"flex",gap:8,alignItems:"center"}}>
+            <input value={newName} onChange={e=>setNewName(e.target.value)}
+              placeholder="Holiday name (e.g. Thanksgiving)"
+              onKeyDown={e=>e.key==="Enter"&&addHoliday()}
+              style={{flex:1,border:"1px solid #e5e7eb",borderRadius:8,padding:"7px 10px",fontSize:13}} />
+            <input type="date" value={newDate} onChange={e=>setNewDate(e.target.value)}
+              style={{border:"1px solid #e5e7eb",borderRadius:8,padding:"7px 8px",fontSize:13}} />
+            <button onClick={addHoliday} style={{
+              padding:"7px 16px",borderRadius:8,background:"#1e3a5f",color:"#fff",
+              border:"none",fontWeight:700,fontSize:13,cursor:"pointer",whiteSpace:"nowrap"
+            }}>+ Add</button>
           </div>
-          <div style={{fontSize:9,color:"#9ca3af",marginTop:5}}>* Floating date — calculated automatically for {year}</div>
         </div>
 
-        {/* This year's holidays */}
-        <div style={{marginBottom:16}}>
+        {/* Holiday list */}
+        <div style={{marginBottom:18}}>
           <div style={{fontSize:11,fontWeight:700,color:"#9ca3af",textTransform:"uppercase",letterSpacing:"0.05em",marginBottom:8}}>
             {year} Holidays ({items.length})
           </div>
           {sorted.length === 0 ? (
-            <div style={{padding:"16px",textAlign:"center",color:"#9ca3af",fontSize:12,background:"#f9fafb",borderRadius:8}}>
-              No holidays defined for {year} yet
+            <div style={{padding:20,textAlign:"center",color:"#9ca3af",fontSize:13,background:"#f9fafb",borderRadius:10,border:"1px solid #f3f4f6"}}>
+              No holidays added for {year} yet
             </div>
           ) : (
-            <div style={{display:"flex",flexDirection:"column",gap:5}}>
+            <div style={{display:"flex",flexDirection:"column",gap:6}}>
               {sorted.map(h => (
-                <div key={h.date} style={{display:"flex",alignItems:"center",gap:8,padding:"8px 12px",borderRadius:10,background:"#f9fafb",border:"1px solid #f3f4f6"}}>
+                <div key={h.date} style={{display:"flex",alignItems:"center",gap:8,padding:"10px 14px",borderRadius:10,background:"#f9fafb",border:"1px solid #f3f4f6"}}>
                   <div style={{flex:1}}>
                     <div style={{fontSize:13,fontWeight:700,color:"#111827"}}>{h.name}</div>
-                    <div style={{fontSize:11,color:"#6b7280"}}>
+                    <div style={{fontSize:11,color:"#6b7280",marginTop:1}}>
                       {new Date(h.date+"T12:00:00").toLocaleDateString("en-US",{weekday:"long",month:"long",day:"numeric",year:"numeric"})}
                     </div>
                   </div>
                   {confirmApply?.date === h.date ? (
-                    <div style={{display:"flex",gap:5,alignItems:"center"}}>
+                    <div style={{display:"flex",gap:6,alignItems:"center"}}>
                       <span style={{fontSize:11,color:"#dc2626",fontWeight:600}}>Mark as holiday + clear entries?</span>
-                      <button onClick={()=>applyHoliday(h)} style={{padding:"3px 10px",borderRadius:6,background:"#dc2626",color:"#fff",border:"none",fontSize:11,fontWeight:700,cursor:"pointer"}}>Yes</button>
-                      <button onClick={()=>setConfirmApply(null)} style={{padding:"3px 10px",borderRadius:6,background:"#f3f4f6",border:"none",fontSize:11,fontWeight:600,cursor:"pointer"}}>Cancel</button>
+                      <button onClick={()=>applyHoliday(h)} style={{padding:"4px 12px",borderRadius:6,background:"#dc2626",color:"#fff",border:"none",fontSize:11,fontWeight:700,cursor:"pointer"}}>Yes, Apply</button>
+                      <button onClick={()=>setConfirmApply(null)} style={{padding:"4px 10px",borderRadius:6,background:"#f3f4f6",border:"none",fontSize:11,fontWeight:600,cursor:"pointer"}}>Cancel</button>
                     </div>
                   ) : (
-                    <button onClick={()=>setConfirmApply(h)} style={{padding:"3px 10px",borderRadius:7,background:"#eff6ff",border:"1px solid #bfdbfe",color:"#1d4ed8",fontSize:11,fontWeight:700,cursor:"pointer",whiteSpace:"nowrap"}}>
-                      Apply to Schedule
-                    </button>
+                    <button onClick={()=>setConfirmApply(h)} style={{
+                      padding:"4px 12px",borderRadius:7,background:"#eff6ff",
+                      border:"1px solid #bfdbfe",color:"#1d4ed8",
+                      fontSize:11,fontWeight:700,cursor:"pointer",whiteSpace:"nowrap"
+                    }}>Apply to Schedule</button>
                   )}
-                  <button onClick={()=>removeItem(h.date)} style={{background:"#fee2e2",border:"none",borderRadius:6,color:"#dc2626",fontWeight:700,cursor:"pointer",padding:"3px 8px",fontSize:11}}>✕</button>
+                  <button onClick={()=>removeItem(h.date)} style={{
+                    background:"#fee2e2",border:"none",borderRadius:6,
+                    color:"#dc2626",fontWeight:700,cursor:"pointer",padding:"4px 9px",fontSize:11
+                  }}>✕</button>
                 </div>
               ))}
             </div>
           )}
         </div>
 
-        {/* Add custom */}
-        <div style={{borderTop:"1px solid #f3f4f6",paddingTop:14,marginBottom:16}}>
-          <div style={{fontSize:11,fontWeight:700,color:"#9ca3af",textTransform:"uppercase",letterSpacing:"0.05em",marginBottom:8}}>Add Custom Holiday</div>
-          <div style={{display:"flex",gap:8,alignItems:"center"}}>
-            <input value={newName} onChange={e=>setNewName(e.target.value)} placeholder="Holiday name"
-              onKeyDown={e=>e.key==="Enter"&&addCustom()}
-              style={{flex:1,border:"1px solid #e5e7eb",borderRadius:8,padding:"6px 10px",fontSize:13}} />
-            <input type="date" value={newDate} onChange={e=>setNewDate(e.target.value)}
-              style={{border:"1px solid #e5e7eb",borderRadius:8,padding:"6px 8px",fontSize:13}} />
-            <button onClick={addCustom} style={{padding:"6px 14px",borderRadius:8,background:"#1e3a5f",color:"#fff",border:"none",fontWeight:700,fontSize:13,cursor:"pointer"}}>+ Add</button>
-          </div>
-        </div>
-
-        <div style={{display:"flex",gap:10,justifyContent:"flex-end"}}>
+        <div style={{display:"flex",gap:10,justifyContent:"flex-end",borderTop:"1px solid #f3f4f6",paddingTop:14}}>
           <button onClick={onClose} style={{padding:"8px 20px",borderRadius:9,background:"#f3f4f6",border:"none",fontSize:13,fontWeight:600,cursor:"pointer"}}>Cancel</button>
           <button onClick={save} style={{padding:"8px 20px",borderRadius:9,background:"#1e3a5f",color:"#fff",border:"none",fontSize:13,fontWeight:700,cursor:"pointer"}}>Save</button>
         </div>
