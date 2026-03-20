@@ -330,6 +330,13 @@ async function sbDeleteStaff(staffId) {
   await sb.from("staff").delete().eq("id", String(staffId));
 }
 
+async function sbDeleteEntriesForDate(dateStr) {
+  const sb = await getSB();
+  const { error } = await sb.from("entries").delete().eq("date_str", dateStr);
+  if (error) console.error("[StaffPlan] Failed to delete entries for", dateStr, error);
+  else console.log("[StaffPlan] Deleted all entries for holiday date:", dateStr);
+}
+
 async function sbSaveStaff(staffArr) {
   const sb = await getSB();
   // Deduplicate by rounded ID — keep last occurrence
@@ -394,7 +401,23 @@ async function sbSaveDailyStats(statsObj) {
   }
   for (let i = 0; i < rows.length; i += 500) {
     const { error } = await sb.from("daily_stats").upsert(rows.slice(i, i+500), { onConflict: "date_str" });
-    if (error) console.error("[StaffPlan] daily_stats save error:", error);
+    if (error) {
+      console.error("[StaffPlan] daily_stats save error:", error);
+    } else if (holidayRows.length > 0) {
+      // Verify the holiday rows actually made it into the DB
+      const dates = holidayRows.map(r => r.date_str);
+      const { data: verify, error: verifyErr } = await sb.from("daily_stats")
+        .select("date_str, data")
+        .in("date_str", dates);
+      if (verifyErr) {
+        console.error("[StaffPlan] Verify read failed:", verifyErr);
+      } else {
+        const savedHolidays = (verify||[]).filter(r => r.data?.holiday).map(r => r.date_str);
+        console.log("[StaffPlan] DB verify — holidays confirmed in DB:", savedHolidays);
+        const missing = dates.filter(d => !savedHolidays.includes(d));
+        if (missing.length) console.error("[StaffPlan] DB verify — MISSING from DB:", missing);
+      }
+    }
   }
 }
 
@@ -848,15 +871,15 @@ export default function StaffingApp() {
   const setHoliday = useCallback((dateStr, isHoliday) => {
     const nextStats = { ...dailyStats, [dateStr]: { ...getDailyStats(dateStr), holiday: isHoliday } };
     if (isHoliday) {
-      // Update both stats and entries atomically in one save to avoid race condition
+      // Update both stats and entries atomically
       const nextEntries = { ...entries };
       staff.forEach(s => { delete nextEntries[`${s.id}_${dateStr}`]; });
-      // Update state
       pushHistory(staff, entries, dailyStats);
       setDailyStats(nextStats);
       setEntries(nextEntries);
-      // Single triggerSave with both updated values
       triggerSave(staff, nextEntries, nextStats, nonWorkTypes, alertSettings, ptoBalances, dayNotes);
+      // Also explicitly delete entries from Supabase — upsert alone won't remove them
+      sbDeleteEntriesForDate(dateStr);
     } else {
       updateDailyStats(nextStats);
     }
