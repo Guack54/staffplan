@@ -536,6 +536,8 @@ export default function StaffingApp() {
   const [drillDay, setDrillDay] = useState(null);
   const [activeTab, setActiveTab] = useState("grid");
   const tabEnteredAt = useRef(Date.now());
+  const [onlineUsers, setOnlineUsers] = useState({});
+  const presenceChannel = useRef(null);
   const [filterTeam, setFilterTeam] = useState("All");
   const [editingName, setEditingName] = useState(null);
   const [tempName, setTempName] = useState("");
@@ -640,6 +642,37 @@ export default function StaffingApp() {
       () => debounce("visits", async () => { const d=await sbLoadVisits(); if(d) setVisitData(d); }),
     );
     return () => { if (_realtimeChannel) getSB().then(sb => sb.removeChannel(_realtimeChannel)); };
+  }, [currentUser]);
+
+  // ── Presence: who is online ──
+  useEffect(() => {
+    if (!currentUser) return;
+    const PRESENCE_COLORS = ["#3b82f6","#10b981","#f59e0b","#8b5cf6","#ef4444","#06b6d4","#f97316","#ec4899"];
+    const myColor = PRESENCE_COLORS[Math.abs([...currentUser.id].reduce((a,c)=>a+c.charCodeAt(0),0)) % PRESENCE_COLORS.length];
+    const myName = currentUser?.profile?.display_name || currentUser.email;
+    const myInitials = myName.split(" ").map(w=>w[0]).join("").toUpperCase().slice(0,2);
+    getSB().then(sb => {
+      const ch = sb.channel("staffplan-presence", { config: { presence: { key: currentUser.id } } });
+      presenceChannel.current = ch;
+      ch.on("presence", { event: "sync" }, () => {
+        const state = ch.presenceState();
+        const users = {};
+        Object.entries(state).forEach(([uid, arr]) => { if (arr[0]) users[uid] = arr[0]; });
+        setOnlineUsers(users);
+      });
+      ch.subscribe(async status => {
+        if (status === "SUBSCRIBED") {
+          await ch.track({ userId: currentUser.id, name: myName, initials: myInitials,
+            role: currentUser?.profile?.role || "viewer", tab: activeTab, color: myColor });
+        }
+      });
+    });
+    return () => {
+      if (presenceChannel.current) {
+        getSB().then(sb => { try { sb.removeChannel(presenceChannel.current); } catch(_){} });
+        presenceChannel.current = null;
+      }
+    };
   }, [currentUser]);
 
   // Load SheetJS dynamically
@@ -1137,6 +1170,10 @@ export default function StaffingApp() {
               tabEnteredAt.current = Date.now();
               trackEvent(currentUser.id, currentUser.email, "tab_view", { tab: tab.id });
               setActiveTab(tab.id);
+              // Update presence with new tab
+              if (presenceChannel.current) {
+                presenceChannel.current.track({ tab: tab.id }).catch(()=>{});
+              }
             }} style={{
               padding:"5px 12px",borderRadius:8,fontSize:12,fontWeight:600,cursor:"pointer",border:"none",
               background:activeTab===tab.id?"#fff":"transparent",
@@ -1148,6 +1185,16 @@ export default function StaffingApp() {
             </button>
           ))}
         </div>
+
+        {/* Online presence indicators */}
+        {Object.keys(onlineUsers).length > 0 && (
+          <div style={{display:"flex",alignItems:"center",gap:4,padding:"3px 8px",borderRadius:99,background:"rgba(255,255,255,0.08)",border:"1px solid rgba(255,255,255,0.12)"}}>
+            <span style={{fontSize:9,color:"#93c5fd",fontWeight:600,marginRight:2}}>ONLINE</span>
+            {Object.entries(onlineUsers).map(([uid, u]) => (
+              <PresenceAvatar key={uid} user={u} isMe={uid === currentUser?.id} />
+            ))}
+          </div>
+        )}
 
         {/* Right controls */}
         <div style={{display:"flex",gap:6,alignItems:"center"}}>
@@ -2545,6 +2592,46 @@ function HolidayToggleBtn({ ds, isHoliday, setHoliday, setDailyStat, small }) {
 
 
 // ─── Mismatch Row (needs useState so must be its own component) ──────────────
+
+// ─── Presence Avatar ──────────────────────────────────────────────────────────
+function PresenceAvatar({ user, isMe }) {
+  const [showTip, setShowTip] = useState(false);
+  const TAB_LABELS = {
+    day:"Day view", grid:"Week view", master:"Master Schedule", month:"Month view",
+    year:"Year view", summary:"Dept Stats", timesheet:"Timesheets", analytics:"Analytics"
+  };
+  return (
+    <div style={{position:"relative",display:"inline-flex"}}
+      onMouseEnter={()=>setShowTip(true)}
+      onMouseLeave={()=>setShowTip(false)}>
+      <div style={{
+        width:26,height:26,borderRadius:"50%",
+        background:user.color||"#3b82f6",
+        display:"flex",alignItems:"center",justifyContent:"center",
+        fontSize:10,fontWeight:800,color:"#fff",
+        border:isMe?"2px solid #fff":"2px solid rgba(255,255,255,0.3)",
+        cursor:"default",flexShrink:0,
+      }}>
+        {user.initials||"?"}
+      </div>
+      {showTip && (
+        <div style={{
+          position:"absolute",top:"calc(100% + 6px)",left:"50%",transform:"translateX(-50%)",
+          background:"#1e293b",color:"#fff",borderRadius:8,padding:"6px 10px",
+          fontSize:11,whiteSpace:"nowrap",zIndex:1000,
+          boxShadow:"0 4px 12px rgba(0,0,0,0.3)",pointerEvents:"none",
+        }}>
+          <div style={{fontWeight:700}}>{user.name}{isMe?" (you)":""}</div>
+          <div style={{fontSize:9,color:"#94a3b8",marginTop:2,textTransform:"uppercase",letterSpacing:"0.04em"}}>{user.role}</div>
+          {user.tab && <div style={{fontSize:10,color:"#7dd3fc",marginTop:3}}>{"📍 " + (TAB_LABELS[user.tab]||user.tab)}</div>}
+          <div style={{position:"absolute",top:-4,left:"50%",transform:"translateX(-50%) rotate(45deg)",
+            width:8,height:8,background:"#1e293b"}} />
+        </div>
+      )}
+    </div>
+  );
+}
+
 function MismatchRow({ item }) {
   const { s, standardTotal, enteredTotal, diff, dayMismatches, debugDays } = item;
   const [expanded, setExpanded] = useState(false);
