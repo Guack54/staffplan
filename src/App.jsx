@@ -2395,15 +2395,21 @@ function UserManagerModal({ currentUser, onClose }) {
       });
       if (error) throw error;
       if (!data.user) throw new Error("User creation failed — check Supabase Auth settings.");
-      // Update their profile role (trigger auto-created it as viewer)
+      // The DB trigger auto-creates the profile as "viewer" — wait then override with chosen role
+      await new Promise(r => setTimeout(r, 1500));
       await sb.from("user_profiles").upsert({
         id: data.user.id, email: newEmail,
         display_name: newName || newEmail.split("@")[0],
         role: newRole
       }, { onConflict: "id" });
-      showMsg(`✓ User ${newEmail} created as ${newRole}. They can sign in now.`);
+      // Verify the role saved correctly, retry once if not
+      const { data: check } = await sb.from("user_profiles").select("role").eq("id", data.user.id).single();
+      if (check && check.role !== newRole) {
+        await sb.from("user_profiles").update({ role: newRole }).eq("id", data.user.id);
+      }
+      showMsg("✓ User " + newEmail + " created as " + newRole + ". They can sign in now.");
       setNewEmail(""); setNewPw(""); setNewName(""); setNewRole("viewer");
-      setTimeout(loadUsers, 1000);
+      setTimeout(loadUsers, 500);
     } catch(e) { showMsg(e.message || "Failed to create user.", "err"); }
     setCreating(false);
   };
@@ -2415,11 +2421,17 @@ function UserManagerModal({ currentUser, onClose }) {
   };
 
   const deleteUser = async (userId, email) => {
-    if (!confirm(`Remove ${email}? They will lose access immediately.`)) return;
+    if (!confirm("Remove " + email + "? They will lose access immediately.")) return;
     const sb = await getSB();
-    await sb.auth.admin.deleteUser(userId);
+    // Delete from user_profiles — this blocks their access since login checks this table
+    // Note: sb.auth.admin.deleteUser requires service role key; profile deletion is sufficient
+    const { error } = await sb.from("user_profiles").delete().eq("id", userId);
+    if (error) {
+      showMsg("Failed to remove user: " + error.message, "err");
+      return;
+    }
     setUsers(prev => prev.filter(u => u.id !== userId));
-    showMsg(`${email} removed.`);
+    showMsg(email + " removed. They will no longer be able to log in.");
   };
 
   const roleBadge = (role) => {
