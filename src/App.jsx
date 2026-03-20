@@ -385,8 +385,14 @@ async function sbSaveDailyStats(statsObj) {
     date_str, data, updated_at: new Date().toISOString()
   }));
   if (!rows.length) return;
+  // Log holiday rows so we can debug persistence issues
+  const holidayRows = rows.filter(r => r.data && r.data.holiday);
+  if (holidayRows.length > 0) {
+    console.log("[StaffPlan] Saving holiday rows:", holidayRows.map(r => r.date_str));
+  }
   for (let i = 0; i < rows.length; i += 500) {
-    await sb.from("daily_stats").upsert(rows.slice(i, i+500), { onConflict: "date_str" });
+    const { error } = await sb.from("daily_stats").upsert(rows.slice(i, i+500), { onConflict: "date_str" });
+    if (error) console.error("[StaffPlan] daily_stats save error:", error);
   }
 }
 
@@ -639,7 +645,7 @@ export default function StaffingApp() {
           setEntries(prev => ({ ...prev, [`${r.staff_id}_${r.date_str}`]: r.segments || [] }));
         }
       },
-      () => { if (isSavingRef.current) return; debounce("stats", async () => { const d=await sbLoadDailyStats(); if(d) setDailyStats(d); }); },
+      () => { if (isSavingRef.current) { console.log("[StaffPlan] Realtime stats change suppressed (saving)"); return; } debounce("stats", async () => { console.log("[StaffPlan] Realtime reloading dailyStats"); const d=await sbLoadDailyStats(); if(d) setDailyStats(d); }); },
       () => { if (isSavingRef.current) return; debounce("visits", async () => { const d=await sbLoadVisits(); if(d) setVisitData(d); }); },
     );
     return () => { if (_realtimeChannel) getSB().then(sb => sb.removeChannel(_realtimeChannel)); };
@@ -694,6 +700,8 @@ export default function StaffingApp() {
     saveTimer.current = setTimeout(async () => {
       setSaveStatus("saving");
       isSavingRef.current = true; // block realtime reloads during save
+      const holidayDates = Object.entries(dailyStatsRef.current || {}).filter(([,v])=>v?.holiday).map(([k])=>k);
+      console.log("[StaffPlan] triggerSave firing. Holiday dates in state:", holidayDates);
       try {
         await Promise.all([
           sbSaveStaff(staffRef.current ?? newStaff),
