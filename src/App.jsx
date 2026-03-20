@@ -2397,23 +2397,18 @@ function UserManagerModal({ currentUser, onClose }) {
       if (!data.user) throw new Error("User creation failed — check Supabase Auth settings.");
       // The DB trigger auto-creates the profile as "viewer" — wait then override with chosen role
       await new Promise(r => setTimeout(r, 2000));
-      const upsertResult = await sb.from("user_profiles").upsert({
-        id: data.user.id, email: newEmail,
-        display_name: newName || newEmail.split("@")[0],
-        role: newRole
-      }, { onConflict: "id" });
-      console.log("upsert result:", upsertResult);
-      // Verify the role saved correctly, retry with update if not
+      // Only update the role field — don't try to set other columns that may not exist
       await new Promise(r => setTimeout(r, 500));
-      const { data: check, error: checkErr } = await sb.from("user_profiles").select("role").eq("id", data.user.id).single();
-      console.log("check after upsert:", check, checkErr);
-      if (check && check.role !== newRole) {
-        const updateResult = await sb.from("user_profiles").update({ role: newRole }).eq("id", data.user.id);
-        console.log("update result:", updateResult);
-        await new Promise(r => setTimeout(r, 500));
-        const { data: check2 } = await sb.from("user_profiles").select("role").eq("id", data.user.id).single();
-        console.log("final role in DB:", check2?.role);
+      const { error: roleErr } = await sb.from("user_profiles").update({ role: newRole }).eq("id", data.user.id);
+      if (roleErr) {
+        // Update failed — try upsert with just id and role
+        const { error: upsertErr } = await sb.from("user_profiles").upsert({ id: data.user.id, role: newRole }, { onConflict: "id" });
+        if (upsertErr) console.error("Role set failed:", upsertErr);
       }
+      // Verify
+      await new Promise(r => setTimeout(r, 500));
+      const { data: check } = await sb.from("user_profiles").select("role").eq("id", data.user.id).single();
+      console.log("Role in DB after create:", check?.role, "(wanted:", newRole + ")");
       showMsg("✓ User " + newEmail + " created as " + newRole + ". They can sign in now.");
       setNewEmail(""); setNewPw(""); setNewName(""); setNewRole("viewer");
       setTimeout(loadUsers, 500);
