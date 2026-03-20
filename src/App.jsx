@@ -2396,16 +2396,23 @@ function UserManagerModal({ currentUser, onClose }) {
       if (error) throw error;
       if (!data.user) throw new Error("User creation failed — check Supabase Auth settings.");
       // The DB trigger auto-creates the profile as "viewer" — wait then override with chosen role
-      await new Promise(r => setTimeout(r, 1500));
-      await sb.from("user_profiles").upsert({
+      await new Promise(r => setTimeout(r, 2000));
+      const upsertResult = await sb.from("user_profiles").upsert({
         id: data.user.id, email: newEmail,
         display_name: newName || newEmail.split("@")[0],
         role: newRole
       }, { onConflict: "id" });
-      // Verify the role saved correctly, retry once if not
-      const { data: check } = await sb.from("user_profiles").select("role").eq("id", data.user.id).single();
+      console.log("upsert result:", upsertResult);
+      // Verify the role saved correctly, retry with update if not
+      await new Promise(r => setTimeout(r, 500));
+      const { data: check, error: checkErr } = await sb.from("user_profiles").select("role").eq("id", data.user.id).single();
+      console.log("check after upsert:", check, checkErr);
       if (check && check.role !== newRole) {
-        await sb.from("user_profiles").update({ role: newRole }).eq("id", data.user.id);
+        const updateResult = await sb.from("user_profiles").update({ role: newRole }).eq("id", data.user.id);
+        console.log("update result:", updateResult);
+        await new Promise(r => setTimeout(r, 500));
+        const { data: check2 } = await sb.from("user_profiles").select("role").eq("id", data.user.id).single();
+        console.log("final role in DB:", check2?.role);
       }
       showMsg("✓ User " + newEmail + " created as " + newRole + ". They can sign in now.");
       setNewEmail(""); setNewPw(""); setNewName(""); setNewRole("viewer");
@@ -2425,9 +2432,17 @@ function UserManagerModal({ currentUser, onClose }) {
     const sb = await getSB();
     // Delete from user_profiles — this blocks their access since login checks this table
     // Note: sb.auth.admin.deleteUser requires service role key; profile deletion is sufficient
-    const { error } = await sb.from("user_profiles").delete().eq("id", userId);
-    if (error) {
-      showMsg("Failed to remove user: " + error.message, "err");
+    const { data: delData, error: delErr } = await sb.from("user_profiles").delete().eq("id", userId).select();
+    console.log("delete user_profiles result:", delData, delErr);
+    if (delErr) {
+      showMsg("Failed to remove user: " + delErr.message, "err");
+      return;
+    }
+    // Verify deletion
+    const { data: stillExists } = await sb.from("user_profiles").select("id").eq("id", userId).single();
+    console.log("user still exists after delete?", stillExists);
+    if (stillExists) {
+      showMsg("Delete failed silently — likely blocked by RLS policy. Check Supabase dashboard.", "err");
       return;
     }
     setUsers(prev => prev.filter(u => u.id !== userId));
