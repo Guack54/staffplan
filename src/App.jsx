@@ -274,6 +274,8 @@ async function sbLoadDailyStats() {
     if (data.length < pageSize) break;
     from += pageSize;
   }
+  const holidays = Object.entries(out).filter(([,v])=>v?.holiday).map(([k])=>k);
+  console.log("[StaffPlan] sbLoadDailyStats returned holidays:", holidays, "caller:", new Error().stack.split("\n")[2]?.trim());
   return Object.keys(out).length ? out : null;
 }
 
@@ -608,7 +610,7 @@ export default function StaffingApp() {
     (async () => {
       try {
         const [sbStaff, sbEntries, sbStats, sbNW, sbAlerts, sbPTO, sbNotes, sbVisits] = await Promise.all([
-          sbLoadStaff(), sbLoadEntries(), sbLoadDailyStats(),
+          sbLoadStaff(), sbLoadEntries(), sbLoadDailyStats().then(d => { if(d) { const h=Object.entries(d).filter(([,v])=>v?.holiday).map(([k])=>k); console.log("[StaffPlan] Initial load holidays:", h); } return d; }),
           sbLoadNonWorkTypes(), sbLoadAlertSettings(), sbLoadPTO(),
           sbLoadNotes(), sbLoadVisits(),
         ]);
@@ -645,7 +647,7 @@ export default function StaffingApp() {
           setEntries(prev => ({ ...prev, [`${r.staff_id}_${r.date_str}`]: r.segments || [] }));
         }
       },
-      () => { if (isSavingRef.current) { console.log("[StaffPlan] Realtime stats change suppressed (saving)"); return; } debounce("stats", async () => { console.log("[StaffPlan] Realtime reloading dailyStats"); const d=await sbLoadDailyStats(); if(d) setDailyStats(d); }); },
+      () => { if (isSavingRef.current) { console.log("[StaffPlan] Realtime stats change suppressed (saving)"); return; } debounce("stats", async () => { console.log("[StaffPlan] Realtime reloading dailyStats from DB..."); const d=await sbLoadDailyStats(); if(d) { const rh=Object.entries(d).filter(([,v])=>v?.holiday).map(([k])=>k); console.log("[StaffPlan] Realtime setDailyStats with holidays:", rh); setDailyStats(d); } }); },
       () => { if (isSavingRef.current) return; debounce("visits", async () => { const d=await sbLoadVisits(); if(d) setVisitData(d); }); },
     );
     return () => { if (_realtimeChannel) getSB().then(sb => sb.removeChannel(_realtimeChannel)); };
