@@ -2447,10 +2447,11 @@ function UserManagerModal({ currentUser, onClose }) {
         </div>
 
         {/* Role legend */}
-        <div style={{display:"flex",gap:10,marginBottom:16,padding:"10px 14px",background:"#f8fafc",borderRadius:9,border:"1px solid #e5e7eb"}}>
-          <div style={{fontSize:11,color:"#6b7280"}}><strong style={{color:"#f59e0b"}}>Admin</strong> — full access, manage users & settings</div>
-          <div style={{fontSize:11,color:"#6b7280"}}><strong style={{color:"#22c55e"}}>Manager</strong> — edit schedules & visits</div>
-          <div style={{fontSize:11,color:"#6b7280"}}><strong style={{color:"#3b82f6"}}>Viewer</strong> — read only</div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:16,padding:"12px 14px",background:"#f8fafc",borderRadius:9,border:"1px solid #e5e7eb"}}>
+          <div style={{fontSize:11,color:"#6b7280"}}><strong style={{color:"#f59e0b"}}>Admin</strong> — full access, manage users, settings & holidays</div>
+          <div style={{fontSize:11,color:"#6b7280"}}><strong style={{color:"#22c55e"}}>Manager</strong> — edit schedules, census & visit data</div>
+          <div style={{fontSize:11,color:"#6b7280"}}><strong style={{color:"#3b82f6"}}>Viewer</strong> — read only, all tabs visible, no editing</div>
+          <div style={{fontSize:11,color:"#6b7280"}}><strong style={{color:"#a78bfa"}}>Staff</strong> — Day, Week & Master views only · hours visible, no reason codes shown</div>
         </div>
 
         {/* Existing users */}
