@@ -1147,7 +1147,7 @@ export default function StaffingApp() {
   const VIEW_TABS = [
     { id:"day",       icon:"☀️", label:"Day"        },
     { id:"grid",      icon:"📅", label:"Week"       },
-    { id:"master",    icon:"📋", label:"Master",    staffHidden: true },
+    { id:"master",    icon:"📋", label:"Master"     },
     { id:"month",     icon:"🗓", label:"Month",     staffHidden: true },
     { id:"year",      icon:"📆", label:"Year",      staffHidden: true },
     { id:"summary",   icon:"📊", label:"Dept Stats & Visits", staffHidden: true },
@@ -1399,9 +1399,9 @@ export default function StaffingApp() {
 
         {/* Weekly metrics strip inline for week view */}
         {activeTab==="grid" && <div style={{display:"flex",gap:16,marginLeft:"auto",flexWrap:"wrap"}}>
-          <Metric label="Shifts" value={weeklyMetrics.totalShifts} />
-          <Metric label="Hours" value={weeklyMetrics.totalHours} />
-          {nonWorkTypes.map(t => weeklyMetrics.nonWork[t.code] > 0 && (
+          {!isStaffRole && <Metric label="Shifts" value={weeklyMetrics.totalShifts} />}
+          {!isStaffRole && <Metric label="Hours" value={weeklyMetrics.totalHours} />}
+          {!isStaffRole && nonWorkTypes.map(t => weeklyMetrics.nonWork[t.code] > 0 && (
             <Metric key={t.code} label={t.label} value={(weeklyMetrics.nonWork[t.code]/8 % 1 === 0 ? weeklyMetrics.nonWork[t.code]/8 : (weeklyMetrics.nonWork[t.code]/8).toFixed(1))+"d"} color={t.color} />
           ))}
         </div>}
@@ -2968,8 +2968,8 @@ function WeekGrid({ filteredStaff, weekDates, getEntry, getDayFTE, nwMap, setEdi
                       background:hasData?"#f0f7ff":isHoliday?"#ede9fe":"transparent",transition:"all 0.1s",
                       position:"relative"
                     }}>
-                      {/* Comment / swap indicators */}
-                      {(hasComment||hasSwap) && (
+                      {/* Comment / swap indicators — hidden for staff role */}
+                      {!isStaffRole && (hasComment||hasSwap) && (
                         <div style={{position:"absolute",top:2,right:3,display:"flex",gap:2,zIndex:5}}>
                           {hasSwap && <span style={{fontSize:9,background:"#fef9c3",borderRadius:3,padding:"0 2px",lineHeight:1.4}}>⇄</span>}
                           {hasComment && (() => {
@@ -3010,18 +3010,31 @@ function WeekGrid({ filteredStaff, weekDates, getEntry, getDayFTE, nwMap, setEdi
                           );
                         }
                         if (mixed) {
+                          if (isStaffRole) {
+                            // Staff role: show work hours + "Out Xh" instead of NW code
+                            const outHrs = nwHrs || 8;
+                            return (
+                              <div key={si} style={{display:"flex",flexDirection:"column",gap:2,padding:"1px 3px",borderRadius:4,background:tc?.bg||"#f0f7ff",borderLeft:"2px solid "+(tc?.dot||"#3b82f6")}}>
+                                <div style={{display:"flex",alignItems:"center",gap:3}}>
+                                  <span style={{fontSize:11,fontWeight:700,color:"#1e3a5f",flexShrink:0}}>{hrs}h</span>
+                                  <span style={{fontSize:9,color:tc?.text||"#1e40af",fontWeight:600,flex:1}}>{e.team||s.team}</span>
+                                </div>
+                                <div style={{display:"flex",alignItems:"center",gap:2,padding:"1px 3px",borderRadius:3,background:"#f3f4f6"}}>
+                                  <span style={{fontSize:9,fontWeight:700,color:"#6b7280"}}>{"Out " + outHrs + "h"}</span>
+                                </div>
+                              </div>
+                            );
+                          }
                           return (
                             <div key={si} style={{display:"flex",flexDirection:"column",gap:2,padding:"1px 3px",borderRadius:4,background:tc?.bg||"#f0f7ff",borderLeft:"2px solid "+(tc?.dot||"#3b82f6")}}>
                               <div style={{display:"flex",alignItems:"center",gap:3}}>
                                 <span style={{fontSize:11,fontWeight:700,color:"#1e3a5f",flexShrink:0}}>{hrs}h</span>
                                 <span style={{fontSize:9,color:tc?.text||"#1e40af",fontWeight:600,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",flex:1}}>{e.team||s.team}</span>
                               </div>
-                              {!isStaffRole && (
-                                <div style={{display:"flex",alignItems:"center",gap:2,padding:"1px 3px",borderRadius:3,background:nw.color+"18"}}>
-                                  <span style={{fontSize:9,fontWeight:800,color:nw.color}}>{nw.code}</span>
-                                  <span style={{fontSize:9,color:nw.color+"bb",fontWeight:600}}>{nwHrs||8}h</span>
-                                </div>
-                              )}
+                              <div style={{display:"flex",alignItems:"center",gap:2,padding:"1px 3px",borderRadius:3,background:nw.color+"18"}}>
+                                <span style={{fontSize:9,fontWeight:800,color:nw.color}}>{nw.code}</span>
+                                <span style={{fontSize:9,color:nw.color+"bb",fontWeight:600}}>{nwHrs||8}h</span>
+                              </div>
                             </div>
                           );
                         }
