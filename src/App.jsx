@@ -564,6 +564,7 @@ export default function StaffingApp() {
   const triggerSaveRef = useRef(null);
   const isRestoringRef = useRef(false);
   const realtimeDebounce = useRef({});
+  const isSavingRef = useRef(false); // suppress realtime reloads while we're saving
 
   const [menuOpen, setMenuOpen] = useState(false);
   const [showPwManager, setShowPwManager] = useState(false);
@@ -630,16 +631,16 @@ export default function StaffingApp() {
       realtimeDebounce.current[key] = setTimeout(fn, ms);
     };
     subscribeRealtime(
-      () => debounce("staff", async () => { const d=await sbLoadStaff(); if(d) setStaff(d); }),
+      () => { if (isSavingRef.current) return; debounce("staff", async () => { const d=await sbLoadStaff(); if(d) setStaff(d); }); },
       (payload) => {
-        // For entries, update just the changed row instead of reloading everything
+        if (isSavingRef.current) return; // skip — this is our own save echoing back
         const r = payload.new;
         if (r && r.staff_id && r.date_str) {
           setEntries(prev => ({ ...prev, [`${r.staff_id}_${r.date_str}`]: r.segments || [] }));
         }
       },
-      () => debounce("stats", async () => { const d=await sbLoadDailyStats(); if(d) setDailyStats(d); }),
-      () => debounce("visits", async () => { const d=await sbLoadVisits(); if(d) setVisitData(d); }),
+      () => { if (isSavingRef.current) return; debounce("stats", async () => { const d=await sbLoadDailyStats(); if(d) setDailyStats(d); }); },
+      () => { if (isSavingRef.current) return; debounce("visits", async () => { const d=await sbLoadVisits(); if(d) setVisitData(d); }); },
     );
     return () => { if (_realtimeChannel) getSB().then(sb => sb.removeChannel(_realtimeChannel)); };
   }, [currentUser]);
@@ -692,9 +693,8 @@ export default function StaffingApp() {
     if (saveTimer.current) clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(async () => {
       setSaveStatus("saving");
+      isSavingRef.current = true; // block realtime reloads during save
       try {
-        // Always use the latest ref values so rapid sequential updates don't lose data
-        // The passed-in values are used as fallback only if refs aren't available yet
         await Promise.all([
           sbSaveStaff(staffRef.current ?? newStaff),
           sbSaveEntries(entriesRef.current ?? newEntries),
@@ -707,6 +707,10 @@ export default function StaffingApp() {
         ]);
         setSaveStatus("saved");
       } catch(e) { console.error("Save error:", e); setSaveStatus("unsaved"); }
+      finally {
+        // Re-enable realtime reloads after a short buffer
+        setTimeout(() => { isSavingRef.current = false; }, 2000);
+      }
     }, 1200);
   }, [canEdit, visitData]);
 
