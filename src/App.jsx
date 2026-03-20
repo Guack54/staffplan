@@ -693,15 +693,17 @@ export default function StaffingApp() {
     saveTimer.current = setTimeout(async () => {
       setSaveStatus("saving");
       try {
+        // Always use the latest ref values so rapid sequential updates don't lose data
+        // The passed-in values are used as fallback only if refs aren't available yet
         await Promise.all([
-          sbSaveStaff(newStaff),
-          sbSaveEntries(newEntries),
-          sbSaveDailyStats(newDailyStats),
-          sbSaveNonWorkTypes(newNonWork),
-          sbSaveAlertSettings(newAlerts),
-          sbSavePTO(newPTO),
-          sbSaveNotes(newNotes),
-          sbSaveVisits(newVisits ?? visitData),
+          sbSaveStaff(staffRef.current ?? newStaff),
+          sbSaveEntries(entriesRef.current ?? newEntries),
+          sbSaveDailyStats(dailyStatsRef.current ?? newDailyStats),
+          sbSaveNonWorkTypes(nonWorkTypesRef.current ?? newNonWork),
+          sbSaveAlertSettings(alertSettingsRef.current ?? newAlerts),
+          sbSavePTO(ptoBalancesRef.current ?? newPTO),
+          sbSaveNotes(dayNotesRef.current ?? newNotes),
+          sbSaveVisits(visitDataRef.current ?? newVisits ?? visitData),
         ]);
         setSaveStatus("saved");
       } catch(e) { console.error("Save error:", e); setSaveStatus("unsaved"); }
@@ -714,6 +716,15 @@ export default function StaffingApp() {
   ptoBalancesRef.current = ptoBalances;
   dayNotesRef.current = dayNotes;
   triggerSaveRef.current = triggerSave;
+  // Latest state refs — used by triggerSave to always write fresh data
+  const staffRef = useRef(staff);
+  const entriesRef = useRef(entries);
+  const dailyStatsRef = useRef(dailyStats);
+  const visitDataRef = useRef(visitData);
+  staffRef.current = staff;
+  entriesRef.current = entries;
+  dailyStatsRef.current = dailyStats;
+  visitDataRef.current = visitData;
 
   const pushHistory = useCallback((s, e, d) => {
     historyStack.current = [...historyStack.current.slice(-19), { staff: s, entries: e, dailyStats: d }];
@@ -822,13 +833,21 @@ export default function StaffingApp() {
 
   const setHoliday = useCallback((dateStr, isHoliday) => {
     const nextStats = { ...dailyStats, [dateStr]: { ...getDailyStats(dateStr), holiday: isHoliday } };
-    updateDailyStats(nextStats);
     if (isHoliday) {
+      // Update both stats and entries atomically in one save to avoid race condition
       const nextEntries = { ...entries };
       staff.forEach(s => { delete nextEntries[`${s.id}_${dateStr}`]; });
-      updateEntries(nextEntries);
+      // Update state
+      pushHistory(staff, entries, dailyStats);
+      setDailyStats(nextStats);
+      setEntries(nextEntries);
+      // Single triggerSave with both updated values
+      triggerSave(staff, nextEntries, nextStats, nonWorkTypes, alertSettings, ptoBalances, dayNotes);
+    } else {
+      updateDailyStats(nextStats);
     }
-  }, [dailyStats, getDailyStats, updateDailyStats, entries, staff, updateEntries]);
+  }, [dailyStats, getDailyStats, updateDailyStats, entries, staff, pushHistory,
+      setDailyStats, setEntries, triggerSave, nonWorkTypes, alertSettings, ptoBalances, dayNotes]);
 
   // getDayFTE counts ALL non-archived staff entries for a date
   // Used by visits metrics and reporting — not filtered by employment dates
