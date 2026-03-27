@@ -1392,7 +1392,7 @@ export default function StaffingApp() {
               />
             )}
             <PersonFilterDropdown
-              staff={filteredStaff}
+              staff={staff.filter(s => !s.archived)}
               filterPersons={filterPersons}
               setFilterPersons={setFilterPersons}
             />
