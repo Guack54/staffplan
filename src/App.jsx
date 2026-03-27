@@ -1391,6 +1391,11 @@ export default function StaffingApp() {
                 setFilterCompetencies={setFilterCompetencies}
               />
             )}
+            <PersonFilterDropdown
+              staff={filteredStaff}
+              filterPersons={filterPersons}
+              setFilterPersons={setFilterPersons}
+            />
           </div>
         </>}
 
@@ -3027,10 +3032,7 @@ function WeekGrid({ filteredStaff, weekDates, getEntry, getDayFTE, nwMap, setEdi
                     <span style={{color:"#111827",cursor:canEdit?"pointer":"default"}} onDoubleClick={()=>{if(canEdit){setEditingName(s.id);setTempName(s.name);}}} title={canEdit?"Double-click to rename":""}>{s.name}</span>
                   )}
                 </div>
-                <div style={{display:"flex",alignItems:"center",gap:6,marginLeft:13}}>
-                  <span style={{fontSize:10,color:TEAM_COLORS[s.team]?.text}}>{s.team}</span>
-                  {!compactMode && s.fte && <span style={{fontSize:9,color:"#9ca3af",fontWeight:600}}>{Math.round((s.fte||1)*40)}h/wk</span>}
-                </div>
+                <div style={{fontSize:10,color:TEAM_COLORS[s.team]?.text,marginLeft:13}}>{s.team}</div>
                 {!compactMode && (s.competencies||[]).length > 0 && (
                   <div style={{display:"flex",gap:3,flexWrap:"wrap",marginLeft:13,marginTop:3}}>
                     {(s.competencies||[]).map(cid => {
