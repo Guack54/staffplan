@@ -568,6 +568,7 @@ export default function StaffingApp() {
   const [onlineUsers, setOnlineUsers] = useState({});
   const presenceChannel = useRef(null);
   const [filterTeam, setFilterTeam] = useState("All");
+  const [filterPersons, setFilterPersons] = useState([]); // [] = show all
   const [editingName, setEditingName] = useState(null);
   const [tempName, setTempName] = useState("");
   const [showUpload, setShowUpload] = useState(false);
@@ -597,7 +598,7 @@ export default function StaffingApp() {
 
   const [menuOpen, setMenuOpen] = useState(false);
   const [showPwManager, setShowPwManager] = useState(false);
-  const [compactMode, setCompactMode] = useState(false);
+  const [compactMode, setCompactMode] = useState(true);
   const [showAlertsEditor, setShowAlertsEditor] = useState(false);
   const [showBatchEntry, setShowBatchEntry] = useState(false);
   const [alertSettings, setAlertSettings] = useState({ fteTargets: DEFAULT_FTE_TARGETS, censusTargets: DEFAULT_CENSUS_TARGETS });
@@ -822,8 +823,9 @@ export default function StaffingApp() {
     const compFiltered = filterCompetencies.length === 0 ? active : active.filter(s =>
       filterCompetencies.every(cid => (s.competencies || []).includes(cid))
     );
-    if (filterTeam === "All") return sortByName(compFiltered);
-    return sortByName(compFiltered.filter(s => {
+    const personFiltered = filterPersons.length === 0 ? compFiltered : compFiltered.filter(s => filterPersons.includes(s.id));
+    if (filterTeam === "All") return sortByName(personFiltered);
+    return sortByName(personFiltered.filter(s => {
       if (s.team === filterTeam) return true;
       return getWeekDates(weekStart).some(date => {
         const segs = (entries[`${s.id}_${fmt(date)}`] || []);
@@ -831,7 +833,7 @@ export default function StaffingApp() {
         return arr.some(e => (e.team || s.team) === filterTeam && Number(e.hours) > 0);
       });
     }));
-  }, [staff, filterTeam, filterCompetencies, entries, weekStart]);
+  }, [staff, filterTeam, filterCompetencies, filterPersons, entries, weekStart]);
   const nwMap = useMemo(() => Object.fromEntries(nonWorkTypes.map(n => [n.code, n])), [nonWorkTypes]);
 
   // Returns true if staff member is active on a given date string
@@ -913,13 +915,19 @@ export default function StaffingApp() {
     return { total: total.toFixed(2), byTeam: teamFTE };
   }, [staff, getEntry]);
 
+  const SICK_BALANCE_HRS = 56; // fixed annual sick balance, resets Jan 1
+  const currentYear = new Date().getFullYear();
   const ptoAlerts = useMemo(() => {
     const alerts = [];
+    // Find SICK code from nonWorkTypes
+    const sickCode = nonWorkTypes.find(t => t.code === "SICK" || t.label?.toLowerCase().includes("sick"))?.code || "SICK";
     staff.forEach(s => {
-      const balance = ptoBalances[s.id] || {};
       const used = {};
       Object.entries(entries).forEach(([key, val]) => {
         if (!key.startsWith(s.id + "_")) return;
+        // Only count entries in the current year
+        const dateStr = key.substring(key.indexOf("_") + 1);
+        if (!dateStr.startsWith(String(currentYear))) return;
         const segs = Array.isArray(val) ? val : (val ? [val] : []);
         segs.forEach(e => {
           if (e.nonWork) {
@@ -928,18 +936,16 @@ export default function StaffingApp() {
           }
         });
       });
-      Object.entries(balance).forEach(([code, limit]) => {
-        if (!limit || limit <= 0) return;
-        const usedHrs = used[code] || 0;
-        if (usedHrs > limit) {
-          alerts.push({ staffId:s.id, staffName:s.name, team:s.team, code, usedHrs, limit, overBy:usedHrs-limit, severity:"red" });
-        } else if (usedHrs >= limit * 0.9) {
-          alerts.push({ staffId:s.id, staffName:s.name, team:s.team, code, usedHrs, limit, overBy:0, severity:"amber" });
-        }
-      });
+      // Only alert on sick time
+      const sickUsed = used[sickCode] || 0;
+      if (sickUsed > SICK_BALANCE_HRS) {
+        alerts.push({ staffId:s.id, staffName:s.name, team:s.team, code:sickCode, usedHrs:sickUsed, limit:SICK_BALANCE_HRS, overBy:sickUsed-SICK_BALANCE_HRS, severity:"red" });
+      } else if (sickUsed >= SICK_BALANCE_HRS * 0.9) {
+        alerts.push({ staffId:s.id, staffName:s.name, team:s.team, code:sickCode, usedHrs:sickUsed, limit:SICK_BALANCE_HRS, overBy:0, severity:"amber" });
+      }
     });
     return alerts.sort((a,b) => (b.severity==="red"?1:0)-(a.severity==="red"?1:0) || a.staffName.localeCompare(b.staffName));
-  }, [staff, entries, ptoBalances]);
+  }, [staff, entries, nonWorkTypes]);
 
   const getDayAlerts = useCallback((dateStr) => {
     const alerts = [];
@@ -962,7 +968,14 @@ export default function StaffingApp() {
     nonWorkTypes.forEach(t => m.nonWork[t.code] = 0);
     weekDates.forEach(date => {
       const ds = fmt(date);
-      staff.forEach(s => {
+      // Use all non-archived staff (not filteredStaff) to match timesheet total
+      const activeStaff = staff.filter(s => {
+        if (s.archived) return false;
+        if (s.startDate && ds < s.startDate) return false;
+        if (s.terminationDate && ds > s.terminationDate) return false;
+        return true;
+      });
+      activeStaff.forEach(s => {
         const segs = getEntry(s.id, ds);
         segs.forEach(e => {
           m.totalHours += Number(e.hours) || 0;
@@ -1633,11 +1646,22 @@ function DayView({ date, staff, getEntry, setEntrySegments, getDailyStats, setDa
       <div style={{ display: "grid", gridTemplateColumns: "100px repeat(" + TEAMS.length + ", 1fr)", gap: 8 }}>
 
         {/* Total FTE card */}
-        <div style={{ background: we ? "#faf5ff" : "#fff", border: "1px solid " + (we ? "#e9d5ff" : "#e5e7eb"), borderRadius: 12, padding: "14px 16px", display: "flex", flexDirection: "column", justifyContent: "center" }}>
-          <div style={{ fontSize: 10, color: "#9ca3af", fontWeight: 700, textTransform: "uppercase", marginBottom: 4 }}>Total FTE</div>
-          <div style={{ fontSize: 30, fontWeight: 800, color: "#1e3a5f", lineHeight: 1 }}>{fte.total}</div>
-          <div style={{ fontSize: 10, color: "#9ca3af", marginTop: 6 }}>{staffOnDuty.length} staff on duty</div>
-        </div>
+        {(() => {
+          const totalCensus = TEAMS.reduce((sum, t) => sum + (Number(stats.census?.[t]) || 0), 0);
+          return (
+            <div style={{ background: we ? "#faf5ff" : "#fff", border: "1px solid " + (we ? "#e9d5ff" : "#e5e7eb"), borderRadius: 12, padding: "10px 12px", display: "flex", flexDirection: "column", justifyContent: "center" }}>
+              <div style={{ fontSize: 9, color: "#9ca3af", fontWeight: 700, textTransform: "uppercase", marginBottom: 2 }}>Total FTE</div>
+              <div style={{ fontSize: 22, fontWeight: 800, color: "#1e3a5f", lineHeight: 1 }}>{fte.total}</div>
+              <div style={{ fontSize: 9, color: "#9ca3af", marginTop: 3 }}>{staffOnDuty.length} on duty</div>
+              {totalCensus > 0 && <>
+                <div style={{ width: "100%", height: 1, background: "#e5e7eb", margin: "6px 0" }} />
+                <div style={{ fontSize: 9, color: "#9ca3af", fontWeight: 700, textTransform: "uppercase", marginBottom: 2 }}>Census</div>
+                <div style={{ fontSize: 22, fontWeight: 800, color: "#1e3a5f", lineHeight: 1 }}>{totalCensus}</div>
+                <div style={{ fontSize: 9, color: "#9ca3af", marginTop: 2 }}>total pts</div>
+              </>}
+            </div>
+          );
+        })()}
 
         {/* Per-team cards: FTE + census in one aligned card */}
         {TEAMS.map(t => {
@@ -2713,6 +2737,76 @@ function PresenceAvatar({ user, isMe }) {
   );
 }
 
+
+// ─── Person Filter Dropdown ───────────────────────────────────────────────────
+function PersonFilterDropdown({ staff, filterPersons, setFilterPersons }) {
+  const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState("");
+  const ref = useRef(null);
+
+  useEffect(() => {
+    const handler = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, []);
+
+  const filtered = staff.filter(s => s.name.toLowerCase().includes(search.toLowerCase()));
+  const toggle = (id) => setFilterPersons(prev => prev.includes(id) ? prev.filter(x=>x!==id) : [...prev, id]);
+  const count = filterPersons.length;
+
+  return (
+    <div ref={ref} style={{position:"relative"}}>
+      <button onClick={()=>setOpen(v=>!v)} style={{
+        padding:"3px 10px",borderRadius:99,fontSize:11,fontWeight:600,cursor:"pointer",
+        background:count>0?"#1e3a5f":"#f9fafb",
+        color:count>0?"#fff":"#6b7280",
+        border:"1px solid "+(count>0?"#1e3a5f":"#e5e7eb"),
+        display:"flex",alignItems:"center",gap:5
+      }}>
+        {"👤 " + (count > 0 ? "People (" + count + ")" : "People ▼")}
+      </button>
+      {open && (
+        <div style={{position:"absolute",top:"calc(100% + 6px)",right:0,zIndex:200,
+          background:"#fff",borderRadius:12,border:"1px solid #e5e7eb",
+          boxShadow:"0 8px 24px rgba(0,0,0,0.12)",padding:"10px 12px",minWidth:210}}>
+          <div style={{fontSize:10,fontWeight:700,color:"#9ca3af",marginBottom:8,textTransform:"uppercase",letterSpacing:"0.05em"}}>Filter by Person</div>
+          <input
+            value={search} onChange={e=>setSearch(e.target.value)}
+            placeholder="Search..."
+            style={{width:"100%",border:"1px solid #e5e7eb",borderRadius:7,padding:"5px 8px",fontSize:12,marginBottom:7,boxSizing:"border-box"}}
+          />
+          <div style={{maxHeight:200,overflowY:"auto",display:"flex",flexDirection:"column",gap:3}}>
+            {filtered.map(s => {
+              const active = filterPersons.includes(s.id);
+              const tc = TEAM_COLORS[s.team];
+              return (
+                <button key={s.id} onClick={()=>toggle(s.id)} style={{
+                  display:"flex",alignItems:"center",gap:8,padding:"5px 8px",
+                  borderRadius:7,border:"1px solid "+(active?"#1e3a5f22":"#f3f4f6"),
+                  background:active?"#eff6ff":"#f9fafb",
+                  cursor:"pointer",textAlign:"left"
+                }}>
+                  <span style={{width:8,height:8,borderRadius:"50%",background:tc?.dot||"#94a3b8",flexShrink:0}} />
+                  <span style={{fontSize:12,fontWeight:active?700:500,color:active?"#1e3a5f":"#374151",flex:1}}>{s.name}</span>
+                  {active && <span style={{fontSize:10,color:"#1e3a5f"}}>✓</span>}
+                </button>
+              );
+            })}
+            {filtered.length === 0 && <div style={{fontSize:11,color:"#9ca3af",textAlign:"center",padding:8}}>No matches</div>}
+          </div>
+          {count > 0 && (
+            <button onClick={()=>{setFilterPersons([]);setSearch("");setOpen(false);}} style={{
+              marginTop:8,width:"100%",padding:"5px",borderRadius:7,
+              background:"#f3f4f6",border:"none",fontSize:11,fontWeight:600,
+              color:"#6b7280",cursor:"pointer"
+            }}>✕ Clear all</button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function MismatchRow({ item }) {
   const { s, standardTotal, enteredTotal, diff, dayMismatches, debugDays } = item;
   const [expanded, setExpanded] = useState(false);
@@ -2931,7 +3025,10 @@ function WeekGrid({ filteredStaff, weekDates, getEntry, getDayFTE, nwMap, setEdi
                     <span style={{color:"#111827",cursor:canEdit?"pointer":"default"}} onDoubleClick={()=>{if(canEdit){setEditingName(s.id);setTempName(s.name);}}} title={canEdit?"Double-click to rename":""}>{s.name}</span>
                   )}
                 </div>
-                <div style={{fontSize:10,color:TEAM_COLORS[s.team]?.text,marginLeft:13}}>{s.team}</div>
+                <div style={{display:"flex",alignItems:"center",gap:6,marginLeft:13}}>
+                  <span style={{fontSize:10,color:TEAM_COLORS[s.team]?.text}}>{s.team}</span>
+                  {!compactMode && s.defaultHours && <span style={{fontSize:9,color:"#9ca3af",fontWeight:600}}>{s.defaultHours}h/wk</span>}
+                </div>
                 {!compactMode && (s.competencies||[]).length > 0 && (
                   <div style={{display:"flex",gap:3,flexWrap:"wrap",marginLeft:13,marginTop:3}}>
                     {(s.competencies||[]).map(cid => {
@@ -3003,8 +3100,8 @@ function WeekGrid({ filteredStaff, weekDates, getEntry, getDayFTE, nwMap, setEdi
                         if (nonWorkOnly) {
                           return (
                             <div key={si} style={{display:"flex",alignItems:"center",justifyContent:"center",gap:3,padding:"2px 4px",borderRadius:4,
-                              background:isStaffRole?"#f3f4f6":nw.color+"18",
-                              border:"1px solid "+(isStaffRole?"#e5e7eb":nw.color+"44")}}>
+                              background:isStaffRole?"#f3f4f6":`repeating-linear-gradient(45deg,${nw.color}11,${nw.color}11 3px,${nw.color}22 3px,${nw.color}22 6px)`,
+                              border:"1px solid "+(isStaffRole?"#e5e7eb":nw.color+"55")}}>
                               <span style={{fontSize:11,fontWeight:700,color:isStaffRole?"#6b7280":nw.color}}>{isStaffRole?"Out":nw.code}</span>
                               {!isStaffRole && <span style={{fontSize:10,color:nw.color+"bb",fontWeight:600}}>{nwHrs||8}h</span>}
                             </div>
