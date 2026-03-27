@@ -920,7 +920,9 @@ export default function StaffingApp() {
   const ptoAlerts = useMemo(() => {
     const alerts = [];
     // Find SICK code from nonWorkTypes
-    const sickCode = nonWorkTypes.find(t => t.code === "SICK" || t.label?.toLowerCase().includes("sick"))?.code || "SICK";
+    const sickNW = nonWorkTypes.find(t => t.code === "SICK" || t.label?.toLowerCase().includes("sick"));
+    const sickCode = sickNW?.code || "SICK";
+    if (!sickNW) return []; // sick code not defined yet
     staff.forEach(s => {
       const used = {};
       Object.entries(entries).forEach(([key, val]) => {
@@ -3027,7 +3029,7 @@ function WeekGrid({ filteredStaff, weekDates, getEntry, getDayFTE, nwMap, setEdi
                 </div>
                 <div style={{display:"flex",alignItems:"center",gap:6,marginLeft:13}}>
                   <span style={{fontSize:10,color:TEAM_COLORS[s.team]?.text}}>{s.team}</span>
-                  {!compactMode && s.defaultHours && <span style={{fontSize:9,color:"#9ca3af",fontWeight:600}}>{s.defaultHours}h/wk</span>}
+                  {!compactMode && s.fte && <span style={{fontSize:9,color:"#9ca3af",fontWeight:600}}>{Math.round((s.fte||1)*40)}h/wk</span>}
                 </div>
                 {!compactMode && (s.competencies||[]).length > 0 && (
                   <div style={{display:"flex",gap:3,flexWrap:"wrap",marginLeft:13,marginTop:3}}>
@@ -5213,32 +5215,27 @@ function StaffTab({ staff, updateStaff, entries, updateEntries, weekStart, nonWo
                     <div style={{ marginTop: 12, borderTop: "1px solid #fde68a", paddingTop: 12 }}>
                       <div style={{ fontSize: 11, fontWeight: 700, color: "#92400e", marginBottom: 8 }}>PTO Balances (Annual Hours)</div>
                       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(140px, 1fr))", gap: 8 }}>
-                        {["VAC","SICK"].map(code => {
-                          const nw = nonWorkTypes.find(n => n.code === code);
+                        {(() => {
+                          const SICK_LIMIT = 56;
+                          const sickCode = nonWorkTypes.find(n => n.code === "SICK" || n.label?.toLowerCase().includes("sick"))?.code || "SICK";
+                          const nw = nonWorkTypes.find(n => n.code === sickCode);
                           if (!nw) return null;
-                          const balance = getPTOBalance(s.id)[code] || 0;
-                          const used = summary[code] || 0;
-                          const remaining = Math.max(0, balance - used);
-                          const pct = balance > 0 ? Math.min((used / balance) * 100, 100) : 0;
+                          const used = summary[sickCode] || 0;
+                          const remaining = Math.max(0, SICK_LIMIT - used);
+                          const pct = Math.min((used / SICK_LIMIT) * 100, 100);
                           return (
-                            <div key={code} style={{ padding:"10px 12px", borderRadius:9, background:"#fff", border:"1px solid "+nw.color+"33" }}>
-                              <div style={{ fontSize:10, fontWeight:700, color:nw.color, marginBottom:4 }}>{nw.label} Balance</div>
-                              <div style={{ display:"flex", alignItems:"center", gap:6, marginBottom:4 }}>
-                                <span style={{ fontSize:10, color:"#6b7280" }}>Annual:</span>
-                                <input type="number" min="0" step="8" value={balance}
-                                  onChange={e => setPTOBalance(s.id, code, e.target.value)}
-                                  style={{ width:60, border:"1px solid #e5e7eb", borderRadius:5, padding:"1px 5px", fontSize:12, fontWeight:700, textAlign:"center" }} />
-                                <span style={{ fontSize:10, color:"#6b7280" }}>h</span>
-                              </div>
+                            <div style={{ padding:"10px 12px", borderRadius:9, background:"#fff", border:"1px solid "+nw.color+"33" }}>
+                              <div style={{ fontSize:10, fontWeight:700, color:nw.color, marginBottom:4 }}>{nw.label} Balance (Annual)</div>
+                              <div style={{ fontSize:10, color:"#6b7280", marginBottom:6 }}>Limit: <b>56h</b> · resets Jan 1</div>
                               <div style={{ height:5, background:"#f3f4f6", borderRadius:3, marginBottom:4 }}>
-                                <div style={{ height:"100%", width:pct+"%", background:pct>80?"#ef4444":pct>60?"#f59e0b":nw.color, borderRadius:3, transition:"width 0.3s" }} />
+                                <div style={{ height:"100%", width:pct+"%", background:pct>=100?"#ef4444":pct>=80?"#f59e0b":nw.color, borderRadius:3, transition:"width 0.3s" }} />
                               </div>
                               <div style={{ fontSize:10, color:"#6b7280" }}>
                                 Used: <b style={{ color:nw.color }}>{used}h</b> · Left: <b style={{ color:remaining<8?"#dc2626":"#15803d" }}>{remaining}h</b>
                               </div>
                             </div>
                           );
-                        })}
+                        })()}
                       </div>
                     </div>
                   </div>
