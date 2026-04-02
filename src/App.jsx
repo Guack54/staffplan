@@ -2815,7 +2815,7 @@ function PersonFilterDropdown({ staff, filterPersons, setFilterPersons }) {
 }
 
 function MismatchRow({ item }) {
-  const { s, standardTotal, enteredTotal, diff, dayMismatches, debugDays } = item;
+  const { s, standardTotal, enteredTotal, diff } = item;
   const [expanded, setExpanded] = useState(false);
   const tc = TEAM_COLORS[s.team];
   const isUnder = diff < 0;
@@ -2838,25 +2838,8 @@ function MismatchRow({ item }) {
         </div>
       </div>
       {expanded && (
-        <div style={{padding:"0 8px 8px"}}>
-          {dayMismatches.length > 0 && (
-            <div style={{display:"flex",gap:3,flexWrap:"wrap",marginBottom:5}}>
-              {dayMismatches.map(dm => (
-                <span key={dm.ds} style={{fontSize:9,padding:"1px 5px",borderRadius:99,fontWeight:700,
-                  background:dm.type==="missing"?"#fef2f2":"#fffbeb",
-                  color:dm.type==="missing"?"#dc2626":"#d97706",
-                  border:"1px solid "+(dm.type==="missing"?"#fca5a5":"#fde68a")}}>
-                  {dm.date.toLocaleDateString("en-US",{weekday:"short"})}
-                  {dm.type==="missing" ? " missing" : " " + dm.entered + "h / " + dm.expected + "h"}
-                </span>
-              ))}
-            </div>
-          )}
-          <div style={{fontSize:8,color:"#6b7280",fontFamily:"monospace",lineHeight:1.8,background:"#f9fafb",borderRadius:4,padding:"3px 6px"}}>
-            {debugDays && debugDays.filter(d=>d.std>0).map((d,i) => (
-              <div key={i}>{d.day + "(std " + d.std + "h): " + (d.segs.length ? d.segs.join(" | ") : "no entry")}</div>
-            ))}
-          </div>
+        <div style={{padding:"4px 8px 8px",fontSize:10,color:"#6b7280"}}>
+          Weekly standard: <b>{standardTotal}h</b> · Entered: <b style={{color:isUnder?"#dc2626":isOver?"#d97706":"#15803d"}}>{enteredTotal}h</b>
         </div>
       )}
     </div>
@@ -2881,48 +2864,22 @@ function WeekGrid({ filteredStaff, weekDates, getEntry, getDayFTE, nwMap, setEdi
       });
       const standardTotal = normSched.reduce((a, h) => a + h, 0);
       if (standardTotal === 0) return;
+
+      // Count total entered hours + non-work hours across the whole week
       let enteredTotal = 0;
-      const dayMismatches = [];
-      weekDates.forEach((date, i) => {
+      weekDates.forEach((date) => {
         const ds = fmt(date);
-        const standardDayHrs = normSched[i];
-        // Use getEntry to check if a real entry exists — avoids needing entries in scope
-        const segsCheck = getEntry(s.id, ds);
-        const hasRealEntry = segsCheck.some(e => Number(e.hours) > 0 || e.nonWork);
-        // A single segment can have BOTH hours (work) and nonWork (non-work code)
-        // e.g. { hours: 4, nonWork: "VAC", nonWorkHours: 4 } = 4h work + 4h vacation
-        // So we always count BOTH hours and nonWorkHours from every segment
-        let dayEntered = 0;
-        segsCheck.forEach(e => {
-          const workHrs = Number(e.hours) || 0;
-          const nwHrs = e.nonWork
-            ? (Number(e.nonWorkHours) > 0
-                ? Number(e.nonWorkHours)
-                : Math.max(0, standardDayHrs - workHrs))
-            : 0;
-          dayEntered += workHrs + nwHrs;
+        const segs = getEntry(s.id, ds);
+        segs.forEach(e => {
+          enteredTotal += Number(e.hours) || 0;
+          if (e.nonWork) enteredTotal += Number(e.nonWorkHours) || 8;
         });
-        // Cap at standardDayHrs to avoid double-counting on full-day non-work entries
-        // where hours=0 and nonWorkHours=standardDayHrs (those should just equal standard)
-        dayEntered = Math.min(dayEntered, standardDayHrs > 0 ? standardDayHrs : dayEntered);
-        enteredTotal += dayEntered;
-        if (standardDayHrs > 0 && !hasRealEntry) {
-          dayMismatches.push({ date, ds, expected: standardDayHrs, entered: 0, type: "missing" });
-        } else if (standardDayHrs > 0 && hasRealEntry && Math.abs(dayEntered - standardDayHrs) >= 0.5) {
-          dayMismatches.push({ date, ds, expected: standardDayHrs, entered: dayEntered, type: dayEntered < standardDayHrs ? "under" : "over" });
-        }
       });
+
       const diff = enteredTotal - standardTotal;
-      const debugDays = weekDates.map((date, i) => {
-        const segs = getEntry(s.id, fmt(date));
-        return {
-          day: date.toLocaleDateString("en-US",{weekday:"short"}),
-          std: normSched[i],
-          segs: segs.map(e => "hrs=" + e.hours + (e.nonWork ? " nw=" + e.nonWork + " nwh=" + e.nonWorkHours : "")),
-        };
-      });
-      if (Math.abs(diff) >= 0.5 || dayMismatches.some(d => d.type === "missing")) {
-        result.push({ s, standardTotal, enteredTotal, diff, dayMismatches, debugDays });
+      // Only flag if weekly total differs by 0.5h or more
+      if (Math.abs(diff) >= 0.5) {
+        result.push({ s, standardTotal, enteredTotal, diff });
       }
     });
     return result.sort((a, b) => Math.abs(b.diff) - Math.abs(a.diff));
@@ -3093,6 +3050,14 @@ function WeekGrid({ filteredStaff, weekDates, getEntry, getDayFTE, nwMap, setEdi
                           })()}
                         </div>
                       )}
+                      {hasComment && !hasData && (() => {
+                        const commentText = segs.filter(e=>e.comment).map(e=>e.comment).join(" · ");
+                        return (
+                          <div style={{fontSize:9,color:"#6b7280",fontStyle:"italic",padding:"1px 2px",textAlign:"center",lineHeight:1.3}}>
+                            💬 {commentText}
+                          </div>
+                        );
+                      })()}
                       {hasData ? segs.map((e,si) => {
                         const hrs = Number(e.hours)||0;
                         const nw = e.nonWork ? nwMap[e.nonWork] : null;
