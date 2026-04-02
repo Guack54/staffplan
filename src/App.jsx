@@ -3350,7 +3350,8 @@ function CellEditor({ staffId, dateStr, staff, getEntry, setEntrySegments, nwMap
   const removeSeg = i => setSegs(prev=>prev.filter((_,idx)=>idx!==i));
 
   const save = () => {
-    const cleaned = segs.filter(sg=>Number(sg.hours)>0||sg.nonWork);
+    // Keep segments that have hours, a non-work code, OR a comment
+    const cleaned = segs.filter(sg => Number(sg.hours) > 0 || sg.nonWork || sg.comment?.trim());
     setEntrySegments(staffId, dateStr, cleaned.length ? cleaned : []);
     onClose();
   };
