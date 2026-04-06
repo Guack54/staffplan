@@ -71,6 +71,15 @@ function startOfWeek(date) {
   const d = new Date(date); d.setDate(d.getDate() - d.getDay()); d.setHours(0,0,0,0); return d;
 }
 function fmt(date) { return date.toISOString().split("T")[0]; }
+function useWindowWidth() {
+  const [w, setW] = useState(() => typeof window !== "undefined" ? window.innerWidth : 1200);
+  useEffect(() => {
+    const handler = () => setW(window.innerWidth);
+    window.addEventListener("resize", handler);
+    return () => window.removeEventListener("resize", handler);
+  }, []);
+  return w;
+}
 function fmtDisplay(date) { return date.toLocaleDateString("en-US", { month: "short", day: "numeric" }); }
 function fmtDay(date) { return date.toLocaleDateString("en-US", { weekday: "short" }); }
 const isWeekend = d => d.getDay() === 0 || d.getDay() === 6;
@@ -1428,7 +1437,7 @@ export default function StaffingApp() {
       </div>
 
       {/* ── Tab content ── */}
-      <div style={{padding:"16px 20px"}}>
+      <div style={{padding: typeof window !== "undefined" && window.innerWidth < 640 ? "10px 10px" : "16px 20px"}}>
         {activeTab==="day" && (
           <DayView date={dayView} staff={staff} getEntry={getEntry} setEntrySegments={setEntrySegments}
             getDailyStats={getDailyStats} setDailyStat={setDailyStat} setHoliday={setHoliday} getDayFTE={getDayFTE}
@@ -1615,8 +1624,10 @@ function DayView({ date, staff, getEntry, setEntrySegments, getDailyStats, setDa
   // Staff with no entry at all
   const notScheduled = activeFiltered.filter(s => !getStaffHours(s));
 
+  const isMobile = useWindowWidth() < 640;
+
   return (
-    <div style={{ display: "grid", gap: 14 }}>
+    <div style={{ display: "grid", gap: isMobile ? 10 : 14 }}>
       {/* Holiday banner */}
       {stats.holiday && (
         <div style={{padding:"10px 16px",borderRadius:10,background:"#ede9fe",border:"1px solid #c4b5fd",display:"flex",alignItems:"center",justifyContent:"space-between",gap:8}}>
@@ -1642,7 +1653,7 @@ function DayView({ date, staff, getEntry, setEntrySegments, getDailyStats, setDa
             value={dayNotes?.[ds]||""}
             onChange={e => updateDayNotes && updateDayNotes({...dayNotes,[ds]:e.target.value})}
             placeholder="Add a note for today..."
-            style={{flex:1,border:"none",outline:"none",fontSize:12,color:"#374151",background:"transparent"}}
+            style={{flex:1,border:"none",outline:"none",fontSize:isMobile?14:12,color:"#374151",background:"transparent"}}
           />
         ) : (
           <span style={{flex:1,fontSize:12,color:dayNotes?.[ds]?"#374151":"#9ca3af"}}>{dayNotes?.[ds]||"No note for today"}</span>
@@ -1650,7 +1661,7 @@ function DayView({ date, staff, getEntry, setEntrySegments, getDailyStats, setDa
       </div>
 
       {/* Day summary cards — Total FTE + one card per team with FTE & census aligned */}
-      <div style={{ display: "grid", gridTemplateColumns: "100px repeat(" + TEAMS.length + ", 1fr)", gap: 8 }}>
+      <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr 1fr" : "100px repeat(" + TEAMS.length + ", 1fr)", gap: 8 }}>
 
         {/* Total FTE card */}
         {(() => {
@@ -1727,7 +1738,7 @@ function DayView({ date, staff, getEntry, setEntrySegments, getDailyStats, setDa
       <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
         {["All", ...TEAMS].map(t => (
           <button key={t} onClick={() => setFilterTeam(t)} style={{
-            padding: "3px 12px", borderRadius: 99, fontSize: 11, fontWeight: 600, cursor: "pointer",
+            padding: isMobile ? "6px 16px" : "3px 12px", borderRadius: 99, fontSize: isMobile ? 13 : 11, fontWeight: 600, cursor: "pointer",
             background: filterTeam === t ? (t === "All" ? "#1e3a5f" : TEAM_COLORS[t]?.bg) : "#f9fafb",
             color: filterTeam === t ? (t === "All" ? "#fff" : TEAM_COLORS[t]?.text) : "#6b7280",
             border: "1px solid " + (filterTeam === t ? "transparent" : "#e5e7eb")
@@ -1735,7 +1746,7 @@ function DayView({ date, staff, getEntry, setEntrySegments, getDailyStats, setDa
         ))}
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 320px", gap: 14 }}>
+      <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 320px", gap: 14 }}>
         {/* Timeline */}
         <div style={{ background: "#fff", borderRadius: 12, border: "1px solid #e5e7eb", overflow: "hidden" }}>
           <div style={{ padding: "12px 16px", borderBottom: "1px solid #f3f4f6", fontSize: 13, fontWeight: 700, color: "#1e3a5f" }}>
@@ -1855,6 +1866,7 @@ function DayView({ date, staff, getEntry, setEntrySegments, getDailyStats, setDa
               </div>
             </div>
           </div>
+          )}
         </div>
 
         {/* Staff roster panel */}
@@ -1863,7 +1875,7 @@ function DayView({ date, staff, getEntry, setEntrySegments, getDailyStats, setDa
             <div style={{ padding: "10px 14px", borderBottom: "1px solid #f3f4f6", fontSize: 12, fontWeight: 700, color: "#15803d" }}>
               ✓ On Duty ({staffOnDuty.length})
             </div>
-            <div style={{ maxHeight: 220, overflowY: "auto" }}>
+            <div style={{ maxHeight: isMobile ? "none" : 220, overflowY: isMobile ? "visible" : "auto" }}>
               {staffOnDuty.map(({ s, info }) => {
                 const homeTc = TEAM_COLORS[s.team];
                 const workSegs = info.segs.filter(e => Number(e.hours) > 0);
@@ -1892,7 +1904,7 @@ function DayView({ date, staff, getEntry, setEntrySegments, getDailyStats, setDa
               <div style={{ padding: "10px 14px", borderBottom: "1px solid #fef9c3", fontSize: 12, fontWeight: 700, color: "#d97706" }}>
                 ⚠ Out / Leave ({staffOut.length})
               </div>
-              <div style={{ maxHeight: 160, overflowY: "auto" }}>
+              <div style={{ maxHeight: isMobile ? "none" : 160, overflowY: isMobile ? "visible" : "auto" }}>
                 {staffOut.map(({ s, info }) => {
                   const tc = TEAM_COLORS[s.team];
                   const nwSegs = info.segs.filter(e => e.nonWork);
@@ -1925,7 +1937,7 @@ function DayView({ date, staff, getEntry, setEntrySegments, getDailyStats, setDa
             <div style={{ padding: "10px 14px", borderBottom: "1px solid #f3f4f6", fontSize: 12, fontWeight: 700, color: "#9ca3af" }}>
               ○ Not Scheduled ({notScheduled.length})
             </div>
-            <div style={{ maxHeight: 130, overflowY: "auto" }}>
+            <div style={{ maxHeight: isMobile ? "none" : 130, overflowY: isMobile ? "visible" : "auto" }}>
               {notScheduled.map(s => (
                 <div key={s.id} style={{ padding: "6px 14px", borderBottom: "1px solid #f9fafb", fontSize: 11, color: "#9ca3af" }}>
                   <span style={{ display: "inline-block", width: 6, height: 6, borderRadius: "50%", background: TEAM_COLORS[s.team]?.dot + "66", marginRight: 6 }} />
