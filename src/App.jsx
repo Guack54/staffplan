@@ -4591,6 +4591,7 @@ function TimesheetTab({ staff, entries, weekStart, nonWorkTypes }) {
   const [sortCol, setSortCol] = useState("name");
   const [sortDir, setSortDir] = useState(1);
   const [filterTeam, setFilterTeam] = useState("All");
+  const [ecOnly, setEcOnly] = useState(false);
 
   // Compute date range from rangeType
   const { rangeStart, rangeEnd } = useMemo(() => {
@@ -4662,7 +4663,8 @@ function TimesheetTab({ staff, entries, weekStart, nonWorkTypes }) {
   }, [staff, entries, rangeDays, filterTeam]);
 
   const sorted = useMemo(() => {
-    return [...rows].sort((a,b) => {
+    const filtered = ecOnly ? rows.filter(r => (r.ecHrs||0) > 0) : rows;
+    return [...filtered].sort((a,b) => {
       let av, bv;
       if (sortCol==="name")  { av=a.s.name; bv=b.s.name; return sortDir*av.localeCompare(bv); }
       if (sortCol==="team")  { av=a.s.team; bv=b.s.team; return sortDir*av.localeCompare(bv); }
@@ -4672,7 +4674,7 @@ function TimesheetTab({ staff, entries, weekStart, nonWorkTypes }) {
       else { av=a.byTeam[sortCol]||0; bv=b.byTeam[sortCol]||0; }
       return sortDir*(av-bv);
     });
-  }, [rows, sortCol, sortDir]);
+  }, [rows, sortCol, sortDir, ecOnly]);
 
   const toggleSort = (col) => { if(sortCol===col) setSortDir(d=>-d); else { setSortCol(col); setSortDir(-1); } };
   const SortTh = ({col, children, style={}}) => (
@@ -4719,6 +4721,11 @@ function TimesheetTab({ staff, entries, weekStart, nonWorkTypes }) {
           <span style={{fontSize:12,color:"#9ca3af"}}>to</span>
           <input type="date" value={customEnd} onChange={e=>setCustomEnd(e.target.value)} style={{padding:"4px 8px",borderRadius:7,border:"1px solid #d1d5db",fontSize:12}} />
         </>}
+        <button onClick={()=>setEcOnly(v=>!v)} style={{
+          padding:"5px 12px",borderRadius:8,fontSize:11,fontWeight:700,cursor:"pointer",
+          background:ecOnly?"#fef9c3":"#f9fafb",color:ecOnly?"#92400e":"#6b7280",
+          border:"1px solid "+(ecOnly?"#f59e0b":"#e5e7eb")
+        }}>{"⭐ " + (ecOnly?"Extra Comp Only":"All Staff")}</button>
         <select value={filterTeam} onChange={e=>setFilterTeam(e.target.value)} style={{marginLeft:"auto",padding:"5px 10px",borderRadius:8,border:"1px solid #e5e7eb",fontSize:12,fontWeight:600,background:"#fff"}}>
           <option>All</option>
           {TEAMS.map(t=><option key={t}>{t}</option>)}
@@ -4726,11 +4733,16 @@ function TimesheetTab({ staff, entries, weekStart, nonWorkTypes }) {
       </div>
 
       {/* Summary cards */}
-      <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:10}}>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(5,1fr)",gap:10}}>
         <div style={{background:"#fff",borderRadius:12,padding:"12px 16px",border:"1px solid #e5e7eb",textAlign:"center"}}>
           <div style={{fontSize:10,fontWeight:700,color:"#9ca3af",textTransform:"uppercase",marginBottom:4}}>Total Work Hours</div>
           <div style={{fontSize:24,fontWeight:800,color:"#1e3a5f"}}>{totals.totalWork}h</div>
           <div style={{fontSize:10,color:"#9ca3af"}}>{sorted.length} staff</div>
+        </div>
+        <div style={{background:"#fef9c3",borderRadius:12,padding:"12px 16px",border:"1px solid #f59e0b44",textAlign:"center"}}>
+          <div style={{fontSize:10,fontWeight:700,color:"#92400e",textTransform:"uppercase",marginBottom:4}}>⭐ Extra Comp</div>
+          <div style={{fontSize:24,fontWeight:800,color:"#d97706"}}>{totals.ecHrs||0}h</div>
+          <div style={{fontSize:10,color:"#92400e"}}>{((totals.ecShifts||0)%1===0?(totals.ecShifts||0):(totals.ecShifts||0).toFixed(1))} shifts</div>
         </div>
         {TEAMS.map(t => {
           const tc=TEAM_COLORS[t];
@@ -4757,6 +4769,7 @@ function TimesheetTab({ staff, entries, weekStart, nonWorkTypes }) {
                   return <th key={c} style={{padding:"8px 8px",fontWeight:700,fontSize:11,textAlign:"center",color:nw?.color||"#6b7280",background:(nw?.color||"#6b7280")+"11",whiteSpace:"nowrap"}}>{c}</th>;
                 })}
                 {nwCodes.length>0 && <SortTh col="nw" style={{textAlign:"center"}}>NW Hrs</SortTh>}
+                <SortTh col="ec" style={{textAlign:"center",background:sortCol==="ec"?"#fef9c3":"#fffbeb",color:"#92400e"}}>⭐ EC</SortTh>
                 <SortTh col="total" style={{textAlign:"center",background:sortCol==="total"?"#eff6ff":"#f0f7ff",color:"#1e3a5f"}}>Total</SortTh>
               </tr>
             </thead>
