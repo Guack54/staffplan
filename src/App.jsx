@@ -3028,8 +3028,9 @@ function WeekGrid({ filteredStaff, weekDates, getEntry, getDayFTE, nwMap, setEdi
                       position:"relative"
                     }}>
                       {/* Comment / swap indicators — hidden for staff role */}
-                      {!isStaffRole && (hasComment||hasSwap) && (
+                      {!isStaffRole && (hasComment||hasSwap||segs.some(e=>e.extraComp)) && (
                         <div style={{position:"absolute",top:2,right:3,display:"flex",gap:2,zIndex:5}}>
+                          {segs.some(e=>e.extraComp) && <span style={{fontSize:9,background:"#fef9c3",borderRadius:3,padding:"0 2px",lineHeight:1.4}}>⭐</span>}
                           {hasSwap && <span style={{fontSize:9,background:"#fef9c3",borderRadius:3,padding:"0 2px",lineHeight:1.4}}>⇄</span>}
                           {hasComment && (() => {
                             const commentText = segs.filter(e=>e.comment).map(e=>e.comment).join(" · ");
@@ -3315,7 +3316,7 @@ function CellEditor({ staffId, dateStr, staff, getEntry, setEntrySegments, nwMap
   const isHoliday = getDailyStats ? getDailyStats(dateStr)?.holiday : false;
   const [segs, setSegs] = useState(() => {
     const raw = getEntry(staffId, dateStr);
-    return raw.length ? raw.map(r=>({...r})) : [{ hours:"", team: s?.team||TEAMS[0], nonWork: isHoliday?"HOL":"", nonWorkHours: isHoliday?"8":"", comment:"", swap:false }];
+    return raw.length ? raw.map(r=>({...r})) : [{ hours:"", team: s?.team||TEAMS[0], nonWork: isHoliday?"HOL":"", nonWorkHours: isHoliday?"8":"", comment:"", swap:false, extraComp:false }];
   });
 
   const updateSeg = (i, field, value) => setSegs(prev => prev.map((sg, idx) => {
@@ -3346,7 +3347,7 @@ function CellEditor({ staffId, dateStr, staff, getEntry, setEntrySegments, nwMap
     }
     return updated;
   }));
-  const addSeg = () => setSegs(prev=>[...prev,{ hours:"", team: s?.team||TEAMS[0], nonWork:"", nonWorkHours:"", comment:"", swap:false }]);
+  const addSeg = () => setSegs(prev=>[...prev,{ hours:"", team: s?.team||TEAMS[0], nonWork:"", nonWorkHours:"", comment:"", swap:false, extraComp:false }]);
   const removeSeg = i => setSegs(prev=>prev.filter((_,idx)=>idx!==i));
 
   const save = () => {
@@ -3385,6 +3386,13 @@ function CellEditor({ staffId, dateStr, staff, getEntry, setEntrySegments, nwMap
                     {segs.length > 1 ? `Segment ${i+1}` : "Work Entry"}
                   </span>
                   <div style={{display:"flex",gap:4,alignItems:"center"}}>
+                    {/* Extra Comp toggle */}
+                    <button onClick={()=>updateSeg(i,"extraComp",!sg.extraComp)}
+                      title="Mark as extra comp shift"
+                      style={{fontSize:10,padding:"2px 7px",borderRadius:6,border:"1px solid "+(sg.extraComp?"#f59e0b":"#e5e7eb"),
+                        background:sg.extraComp?"#fef9c3":"#f9fafb",color:sg.extraComp?"#92400e":"#9ca3af",fontWeight:700,cursor:"pointer"}}>
+                      ⭐ {sg.extraComp?"Extra Comp":"Extra Comp?"}
+                    </button>
                     {/* Swap toggle */}
                     <button onClick={()=>updateSeg(i,"swap",!sg.swap)}
                       title="Mark as day swap"
@@ -4632,22 +4640,24 @@ function TimesheetTab({ staff, entries, weekStart, nonWorkTypes }) {
     return eligibleStaff.map(s => {
       const byTeam = {}; TEAMS.forEach(t=>{ byTeam[t]=0; });
       const byNW = {};
-      let totalWork=0, totalNW=0;
+      let totalWork=0, totalNW=0, ecHrs=0, ecShifts=0;
       rangeDays.forEach(ds => {
-        // Only count days within employment window
         if (s.startDate && ds < s.startDate) return;
         if (s.terminationDate && ds > s.terminationDate) return;
         const raw = entries[`${s.id}_${ds}`];
         const segs = raw ? (Array.isArray(raw)?raw:[raw]) : [];
+        let dayEcHrs = 0;
         segs.forEach(e => {
           const wh = Number(e.hours)||0;
           const nwh = e.nonWork ? (Number(e.nonWorkHours) || Number(e.hours) || 8) : 0;
           const team = e.team||s.team;
           if (wh>0) { byTeam[team]=(byTeam[team]||0)+wh; totalWork+=wh; }
           if (e.nonWork && nwh>0) { byNW[e.nonWork]=(byNW[e.nonWork]||0)+nwh; totalNW+=nwh; }
+          if (e.extraComp && wh>0) { dayEcHrs += wh; ecHrs += wh; }
         });
+        if (dayEcHrs > 0) ecShifts += dayEcHrs / 8; // fractional shifts
       });
-      return { s, byTeam, byNW, totalWork, totalNW, total:totalWork+totalNW };
+      return { s, byTeam, byNW, totalWork, totalNW, total:totalWork+totalNW, ecHrs, ecShifts };
     }).filter(r => r.total > 0 || !r.s.archived); // hide archived staff with 0 hours in range
   }, [staff, entries, rangeDays, filterTeam]);
 
@@ -4680,7 +4690,8 @@ function TimesheetTab({ staff, entries, weekStart, nonWorkTypes }) {
       TEAMS.forEach(t=>{ byTeam[t]+=(r.byTeam[t]||0); });
       Object.entries(r.byNW).forEach(([code,h])=>{ byNW[code]=(byNW[code]||0)+h; });
     });
-    return { byTeam, byNW, totalWork:rows.reduce((a,r)=>a+r.totalWork,0), totalNW:rows.reduce((a,r)=>a+r.totalNW,0), total:rows.reduce((a,r)=>a+r.total,0) };
+    return { byTeam, byNW, totalWork:rows.reduce((a,r)=>a+r.totalWork,0), totalNW:rows.reduce((a,r)=>a+r.totalNW,0), total:rows.reduce((a,r)=>a+r.total,0),
+      ecHrs:rows.reduce((a,r)=>a+(r.ecHrs||0),0), ecShifts:rows.reduce((a,r)=>a+(r.ecShifts||0),0) };
   }, [rows]);
 
   const nwCodes = useMemo(() => {
@@ -4750,7 +4761,7 @@ function TimesheetTab({ staff, entries, weekStart, nonWorkTypes }) {
               </tr>
             </thead>
             <tbody>
-              {sorted.map(({s, byTeam, byNW, totalWork, totalNW, total}) => {
+              {sorted.map(({s, byTeam, byNW, totalWork, totalNW, total, ecHrs, ecShifts}) => {
                 const tc=TEAM_COLORS[s.team];
                 return (
                   <tr key={s.id} style={{borderBottom:"1px solid #f3f4f6"}}
@@ -4772,6 +4783,9 @@ function TimesheetTab({ staff, entries, weekStart, nonWorkTypes }) {
                       return <td key={c} style={{padding:"8px 8px",textAlign:"center",color:h>0?(nw?.color||"#6b7280"):"#d1d5db",fontWeight:h>0?700:400}}>{fmtH(h)}</td>;
                     })}
                     {nwCodes.length>0 && <td style={{padding:"8px 10px",textAlign:"center",color:totalNW>0?"#d97706":"#d1d5db",fontWeight:totalNW>0?700:400}}>{fmtH(totalNW)}</td>}
+                    <td style={{padding:"8px 10px",textAlign:"center",fontWeight:700,color:(ecHrs||0)>0?"#d97706":"#d1d5db",background:sortCol==="ec"?"#fffbeb":"inherit"}}>
+                      {(ecHrs||0)>0 ? `${ecHrs}h / ${(ecShifts||0)%1===0?(ecShifts||0):(ecShifts||0).toFixed(1)}` : "—"}
+                    </td>
                     <td style={{padding:"8px 10px",textAlign:"center",fontWeight:800,color:"#1e3a5f",background:"#f0f7ff"}}>{fmtH(total)}</td>
                   </tr>
                 );
@@ -4784,6 +4798,9 @@ function TimesheetTab({ staff, entries, weekStart, nonWorkTypes }) {
                 <td style={{padding:"8px 10px",textAlign:"center",fontWeight:800,color:"#1e3a5f"}}>{totals.totalWork>0?`${totals.totalWork}h`:"—"}</td>
                 {nwCodes.map(c=><td key={c} style={{padding:"8px 8px",textAlign:"center",color:"#d97706",fontWeight:800}}>{totals.byNW[c]>0?`${totals.byNW[c]}h`:"—"}</td>)}
                 {nwCodes.length>0 && <td style={{padding:"8px 10px",textAlign:"center",fontWeight:800,color:"#d97706"}}>{totals.totalNW>0?`${totals.totalNW}h`:"—"}</td>}
+                <td style={{padding:"8px 10px",textAlign:"center",fontWeight:800,color:"#d97706",background:"#fffbeb"}}>
+                  {(totals.ecHrs||0)>0?`${totals.ecHrs}h / ${(totals.ecShifts||0)%1===0?(totals.ecShifts||0):(totals.ecShifts||0).toFixed(1)}`:"—"}
+                </td>
                 <td style={{padding:"8px 10px",textAlign:"center",fontWeight:800,color:"#1e3a5f",background:"#e0f2fe"}}>{totals.total>0?`${totals.total}h`:"—"}</td>
               </tr>
             </tbody>
