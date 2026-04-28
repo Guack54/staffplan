@@ -4745,30 +4745,35 @@ function TimesheetTab({ staff, entries, weekStart, nonWorkTypes }) {
       </div>
 
       {/* Summary cards */}
-      <div style={{display:"grid",gridTemplateColumns:"repeat(5,1fr)",gap:10}}>
-        <div style={{background:"#fff",borderRadius:12,padding:"12px 16px",border:"1px solid #e5e7eb",textAlign:"center"}}>
-          <div style={{fontSize:10,fontWeight:700,color:"#9ca3af",textTransform:"uppercase",marginBottom:4}}>Total Work Hours</div>
-          <div style={{fontSize:24,fontWeight:800,color:"#1e3a5f"}}>{totals.totalWork}h</div>
-          <div style={{fontSize:10,color:"#9ca3af"}}>{sorted.length} staff</div>
+      <div style={{display:"grid",gridTemplateColumns:"140px 1fr",gap:12,alignItems:"start"}}>
+        {/* Summary cards — vertical left column */}
+        <div style={{display:"flex",flexDirection:"column",gap:7}}>
+          <div style={{background:"#fff",borderRadius:10,padding:"10px 12px",border:"1px solid #e5e7eb",textAlign:"center"}}>
+            <div style={{fontSize:9,fontWeight:700,color:"#9ca3af",textTransform:"uppercase",marginBottom:2}}>Work Hrs</div>
+            <div style={{fontSize:20,fontWeight:800,color:"#1e3a5f"}}>{totals.totalWork}h</div>
+            <div style={{fontSize:9,color:"#9ca3af"}}>{sorted.length} staff</div>
+          </div>
+          <div style={{background:"#fef9c3",borderRadius:10,padding:"10px 12px",border:"1px solid #f59e0b44",textAlign:"center"}}>
+            <div style={{fontSize:9,fontWeight:700,color:"#92400e",textTransform:"uppercase",marginBottom:2}}>⭐ EC</div>
+            <div style={{fontSize:20,fontWeight:800,color:"#d97706"}}>{totals.ecHrs||0}h</div>
+            <div style={{fontSize:9,color:"#92400e"}}>{((totals.ecShifts||0)%1===0?(totals.ecShifts||0):(totals.ecShifts||0).toFixed(1))} shifts</div>
+          </div>
+          {TEAMS.map(t => {
+            const tc=TEAM_COLORS[t];
+            return <div key={t} style={{background:tc.bg,borderRadius:10,padding:"10px 12px",border:"1px solid "+tc.dot+"44",textAlign:"center"}}>
+              <div style={{fontSize:9,fontWeight:700,color:tc.text,textTransform:"uppercase",marginBottom:2}}>{t}</div>
+              <div style={{fontSize:20,fontWeight:800,color:tc.dot}}>{totals.byTeam[t]}h</div>
+            </div>;
+          })}
+          {totals.totalNW>0 && <div style={{background:"#f9fafb",borderRadius:10,padding:"10px 12px",border:"1px solid #e5e7eb",textAlign:"center"}}>
+            <div style={{fontSize:9,fontWeight:700,color:"#9ca3af",textTransform:"uppercase",marginBottom:2}}>NW Hrs</div>
+            <div style={{fontSize:20,fontWeight:800,color:"#d97706"}}>{totals.totalNW}h</div>
+          </div>}
         </div>
-        <div style={{background:"#fef9c3",borderRadius:12,padding:"12px 16px",border:"1px solid #f59e0b44",textAlign:"center"}}>
-          <div style={{fontSize:10,fontWeight:700,color:"#92400e",textTransform:"uppercase",marginBottom:4}}>⭐ Extra Comp</div>
-          <div style={{fontSize:24,fontWeight:800,color:"#d97706"}}>{totals.ecHrs||0}h</div>
-          <div style={{fontSize:10,color:"#92400e"}}>{((totals.ecShifts||0)%1===0?(totals.ecShifts||0):(totals.ecShifts||0).toFixed(1))} shifts</div>
-        </div>
-        {TEAMS.map(t => {
-          const tc=TEAM_COLORS[t];
-          return <div key={t} style={{background:tc.bg,borderRadius:12,padding:"12px 16px",border:"1px solid "+tc.dot+"44",textAlign:"center"}}>
-            <div style={{fontSize:10,fontWeight:700,color:tc.text,textTransform:"uppercase",marginBottom:4}}>{t}</div>
-            <div style={{fontSize:24,fontWeight:800,color:tc.dot}}>{totals.byTeam[t]}h</div>
-            <div style={{fontSize:10,color:tc.text+"99"}}>{rangeDays.length} days</div>
-          </div>;
-        })}
-      </div>
 
-      {/* Main table */}
-      <div style={{background:"#fff",borderRadius:14,border:"1px solid #e5e7eb",overflow:"hidden"}}>
-        <div style={{overflowX:"auto",maxHeight:"calc(100vh - 340px)",overflowY:"auto"}}>
+        {/* Main table */}
+        <div style={{background:"#fff",borderRadius:14,border:"1px solid #e5e7eb",overflow:"hidden"}}>
+          <div style={{overflowX:"auto",maxHeight:"calc(100vh - 280px)",overflowY:"auto"}}>
           <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
             <thead style={{position:"sticky",top:0,zIndex:5}}>
               <tr style={{borderBottom:"2px solid #e5e7eb"}}>
@@ -4778,7 +4783,7 @@ function TimesheetTab({ staff, entries, weekStart, nonWorkTypes }) {
                 <SortTh col="work" style={{textAlign:"center"}}>Work Hrs</SortTh>
                 {nwCodes.map(c => {
                   const nw=nonWorkTypes.find(n=>n.code===c);
-                  return <th key={c} style={{padding:"8px 8px",fontWeight:700,fontSize:11,textAlign:"center",color:nw?.color||"#6b7280",background:(nw?.color||"#6b7280")+"11",whiteSpace:"nowrap"}}>{c}</th>;
+                  return <th key={c} style={{padding:"6px 7px",fontWeight:700,fontSize:10,textAlign:"center",color:nw?.color||"#6b7280",background:(nw?.color||"#6b7280")+"11",whiteSpace:"nowrap"}}>{c}</th>;
                 })}
                 {nwCodes.length>0 && <SortTh col="nw" style={{textAlign:"center"}}>NW Hrs</SortTh>}
                 <SortTh col="ec" style={{textAlign:"center",background:sortCol==="ec"?"#fef9c3":"#fffbeb",color:"#92400e"}}>⭐ EC</SortTh>
@@ -4801,17 +4806,17 @@ function TimesheetTab({ staff, entries, weekStart, nonWorkTypes }) {
                       <span style={{padding:"2px 7px",borderRadius:99,background:tc?.bg,color:tc?.text,fontSize:10,fontWeight:700}}>{s.team}</span>
                     </td>
                     {TEAMS.map(t=><td key={t} style={{padding:"8px 10px",textAlign:"center",color:byTeam[t]>0?TEAM_COLORS[t].dot:"#d1d5db",fontWeight:byTeam[t]>0?700:400}}>{fmtH(byTeam[t])}</td>)}
-                    <td style={{padding:"8px 10px",textAlign:"center",fontWeight:700,color:"#1e3a5f"}}>{fmtH(totalWork)}</td>
+                    <td style={{padding:"5px 7px",textAlign:"center",fontWeight:700,color:"#1e3a5f"}}>{fmtH(totalWork)}</td>
                     {nwCodes.map(c => {
                       const nw=nonWorkTypes.find(n=>n.code===c);
                       const h=byNW[c]||0;
                       return <td key={c} style={{padding:"8px 8px",textAlign:"center",color:h>0?(nw?.color||"#6b7280"):"#d1d5db",fontWeight:h>0?700:400}}>{fmtH(h)}</td>;
                     })}
                     {nwCodes.length>0 && <td style={{padding:"8px 10px",textAlign:"center",color:totalNW>0?"#d97706":"#d1d5db",fontWeight:totalNW>0?700:400}}>{fmtH(totalNW)}</td>}
-                    <td style={{padding:"8px 10px",textAlign:"center",fontWeight:700,color:(ecHrs||0)>0?"#d97706":"#d1d5db",background:sortCol==="ec"?"#fffbeb":"inherit"}}>
+                    <td style={{padding:"5px 7px",textAlign:"center",fontWeight:700,color:(ecHrs||0)>0?"#d97706":"#d1d5db",background:sortCol==="ec"?"#fffbeb":"inherit"}}>
                       {(ecHrs||0)>0 ? `${ecHrs}h / ${(ecShifts||0)%1===0?(ecShifts||0):(ecShifts||0).toFixed(1)}` : "—"}
                     </td>
-                    <td style={{padding:"8px 10px",textAlign:"center",fontWeight:800,color:"#1e3a5f",background:"#f0f7ff"}}>{fmtH(total)}</td>
+                    <td style={{padding:"5px 7px",textAlign:"center",fontWeight:800,color:"#1e3a5f",background:"#f0f7ff"}}>{fmtH(total)}</td>
                   </tr>
                 );
               })}
@@ -4830,8 +4835,9 @@ function TimesheetTab({ staff, entries, weekStart, nonWorkTypes }) {
               </tr>
             </tbody>
           </table>
+          </div>
+          {sorted.length===0 && <div style={{padding:30,textAlign:"center",color:"#9ca3af",fontSize:13}}>No schedule data for this period.</div>}
         </div>
-        {sorted.length===0 && <div style={{padding:40,textAlign:"center",color:"#9ca3af",fontSize:13}}>No schedule data for this period.</div>}
       </div>
       {/* ── Staff Detail Lookup ─────────────────────────────────────── */}
       <StaffDetailLookup staff={staff} entries={entries} nonWorkTypes={nonWorkTypes} />
