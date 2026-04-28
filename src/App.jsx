@@ -4833,6 +4833,8 @@ function TimesheetTab({ staff, entries, weekStart, nonWorkTypes }) {
         </div>
         {sorted.length===0 && <div style={{padding:40,textAlign:"center",color:"#9ca3af",fontSize:13}}>No schedule data for this period.</div>}
       </div>
+      {/* ── Staff Detail Lookup ─────────────────────────────────────── */}
+      <StaffDetailLookup staff={staff} entries={entries} nonWorkTypes={nonWorkTypes} />
     </div>
   );
 }
@@ -6496,6 +6498,236 @@ function HolidayCalendarEditor({ holidays, updateHolidays, setHoliday, onClose }
           <button onClick={save} style={{padding:"8px 20px",borderRadius:9,background:"#1e3a5f",color:"#fff",border:"none",fontSize:13,fontWeight:700,cursor:"pointer"}}>Save</button>
         </div>
       </div>
+    </div>
+  );
+}
+
+// ─── Staff Detail Lookup ──────────────────────────────────────────────────────
+function StaffDetailLookup({ staff, entries, nonWorkTypes }) {
+  const today = new Date(); today.setHours(0,0,0,0);
+  const [selectedId, setSelectedId] = useState("");
+  const [rangeType, setRangeType] = useState("month");
+  const [customStart, setCustomStart] = useState(() => {
+    const s = new Date(today); s.setDate(1); return fmt(s);
+  });
+  const [customEnd, setCustomEnd] = useState(fmt(today));
+
+  const activeStaff = staff.filter(s => !s.archived).sort((a,b) => a.name.localeCompare(b.name));
+
+  const { rangeStart, rangeEnd } = useMemo(() => {
+    const t = new Date(today);
+    const y = t.getFullYear(), m = t.getMonth();
+    if (rangeType==="week") {
+      const s = new Date(t); s.setDate(t.getDate()-t.getDay());
+      const e = new Date(s); e.setDate(s.getDate()+6);
+      return { rangeStart:fmt(s), rangeEnd:fmt(e) };
+    }
+    if (rangeType==="lastweek") {
+      const s = new Date(t); s.setDate(t.getDate()-t.getDay()-7);
+      const e = new Date(s); e.setDate(s.getDate()+6);
+      return { rangeStart:fmt(s), rangeEnd:fmt(e) };
+    }
+    if (rangeType==="month") return { rangeStart:fmt(new Date(y,m,1)), rangeEnd:fmt(new Date(y,m+1,0)) };
+    if (rangeType==="lastmonth") {
+      const lm=m===0?11:m-1, ly=m===0?y-1:y;
+      return { rangeStart:fmt(new Date(ly,lm,1)), rangeEnd:fmt(new Date(ly,lm+1,0)) };
+    }
+    if (rangeType==="year") return { rangeStart:`${y}-01-01`, rangeEnd:`${y}-12-31` };
+    return { rangeStart:customStart, rangeEnd:customEnd };
+  }, [rangeType, customStart, customEnd]);
+
+  // Build list of all days in range
+  const rangeDays = useMemo(() => {
+    const days = []; let d = new Date(rangeStart+"T12:00:00");
+    const end = new Date(rangeEnd+"T12:00:00");
+    while (d <= end) { days.push(fmt(d)); d.setDate(d.getDate()+1); }
+    return days;
+  }, [rangeStart, rangeEnd]);
+
+  // Find all NW codes used by this person in this range
+  const usedNWCodes = useMemo(() => {
+    if (!selectedId) return [];
+    const codes = new Set();
+    rangeDays.forEach(ds => {
+      const raw = entries[`${selectedId}_${ds}`];
+      const segs = raw ? (Array.isArray(raw)?raw:[raw]) : [];
+      segs.forEach(e => { if (e.nonWork) codes.add(e.nonWork); });
+    });
+    return [...codes].sort();
+  }, [selectedId, entries, rangeDays]);
+
+  // Build rows — one per day
+  const rows = useMemo(() => {
+    if (!selectedId) return [];
+    return rangeDays.map(ds => {
+      const raw = entries[`${selectedId}_${ds}`];
+      const segs = raw ? (Array.isArray(raw)?raw:[raw]) : [];
+      const hasData = segs.some(e => Number(e.hours)>0 || e.nonWork || e.comment);
+      if (!hasData) return { ds, empty: true };
+
+      let workHrs = 0;
+      const nwHrs = {};
+      let isEC = false;
+      const comments = [];
+      segs.forEach(e => {
+        workHrs += Number(e.hours)||0;
+        if (e.nonWork) {
+          const h = Number(e.nonWorkHours)||Number(e.hours)||8;
+          nwHrs[e.nonWork] = (nwHrs[e.nonWork]||0) + h;
+        }
+        if (e.extraComp && Number(e.hours)>0) isEC = true;
+        if (e.comment?.trim()) comments.push(e.comment.trim());
+      });
+      return { ds, empty:false, workHrs: workHrs||null, nwHrs, isEC, comment: comments.join(" · ") };
+    });
+  }, [selectedId, entries, rangeDays]);
+
+  // Export to Excel
+  const exportExcel = () => {
+    if (!selectedId || !window.XLSX) return;
+    const s = activeStaff.find(x=>String(x.id)===selectedId);
+    const headers = ["Date","Day","Work Hrs",...usedNWCodes,"EC","Comment"];
+    const data = rows.map(r => {
+      const date = new Date(r.ds+"T12:00:00");
+      const row = [
+        r.ds,
+        date.toLocaleDateString("en-US",{weekday:"short"}),
+        r.empty||!r.workHrs ? "" : r.workHrs,
+        ...usedNWCodes.map(c => r.empty ? "" : (r.nwHrs?.[c]||"")),
+        r.empty ? "" : (r.isEC?"⭐":""),
+        r.empty ? "" : (r.comment||""),
+      ];
+      return row;
+    });
+    const ws = window.XLSX.utils.aoa_to_sheet([headers,...data]);
+    const wb = window.XLSX.utils.book_new();
+    window.XLSX.utils.book_append_sheet(wb, ws, "Detail");
+    window.XLSX.writeFile(wb, `${s?.name||"Staff"}_Detail_${rangeStart}_${rangeEnd}.xlsx`);
+  };
+
+  const DOW = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+  const selectedStaff = activeStaff.find(s=>String(s.id)===selectedId);
+  const thStyle = { padding:"7px 12px", textAlign:"left", fontSize:11, fontWeight:700,
+    color:"#6b7280", textTransform:"uppercase", letterSpacing:"0.04em",
+    background:"#f8fafc", borderBottom:"2px solid #e5e7eb", whiteSpace:"nowrap" };
+
+  return (
+    <div style={{marginTop:24,background:"#fff",borderRadius:14,border:"1px solid #e5e7eb",overflow:"hidden"}}>
+      {/* Header */}
+      <div style={{padding:"14px 20px",borderBottom:"1px solid #f3f4f6",display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:10}}>
+        <div style={{fontSize:15,fontWeight:800,color:"#1e3a5f"}}>🔍 Staff Detail Lookup</div>
+        {selectedId && rows.some(r=>!r.empty) && (
+          <button onClick={exportExcel} style={{padding:"5px 14px",borderRadius:8,background:"#1e3a5f",color:"#fff",border:"none",fontSize:12,fontWeight:700,cursor:"pointer"}}>
+            ⬇ Export Excel
+          </button>
+        )}
+      </div>
+
+      {/* Controls */}
+      <div style={{padding:"14px 20px",borderBottom:"1px solid #f3f4f6",display:"flex",gap:10,flexWrap:"wrap",alignItems:"center"}}>
+        {/* Staff selector */}
+        <select value={selectedId} onChange={e=>setSelectedId(e.target.value)}
+          style={{padding:"6px 12px",borderRadius:8,border:"1px solid #e5e7eb",fontSize:13,fontWeight:600,background:"#fff",minWidth:200}}>
+          <option value="">— Select staff member —</option>
+          {activeStaff.map(s=>(
+            <option key={s.id} value={String(s.id)}>{s.name} ({s.team})</option>
+          ))}
+        </select>
+
+        {/* Range selector */}
+        <div style={{display:"flex",gap:4,flexWrap:"wrap"}}>
+          {[["week","This Week"],["lastweek","Last Week"],["month","This Month"],["lastmonth","Last Month"],["year","This Year"],["custom","Custom"]].map(([v,l])=>(
+            <button key={v} onClick={()=>setRangeType(v)} style={{
+              padding:"5px 11px",borderRadius:8,fontSize:11,fontWeight:700,cursor:"pointer",
+              background:rangeType===v?"#1e3a5f":"#f3f4f6",
+              color:rangeType===v?"#fff":"#6b7280",border:"none"
+            }}>{l}</button>
+          ))}
+        </div>
+        {rangeType==="custom" && (
+          <div style={{display:"flex",gap:6,alignItems:"center"}}>
+            <input type="date" value={customStart} onChange={e=>setCustomStart(e.target.value)}
+              style={{padding:"5px 8px",borderRadius:7,border:"1px solid #e5e7eb",fontSize:12}} />
+            <span style={{fontSize:11,color:"#9ca3af"}}>to</span>
+            <input type="date" value={customEnd} onChange={e=>setCustomEnd(e.target.value)}
+              style={{padding:"5px 8px",borderRadius:7,border:"1px solid #e5e7eb",fontSize:12}} />
+          </div>
+        )}
+      </div>
+
+      {/* Table */}
+      {!selectedId ? (
+        <div style={{padding:40,textAlign:"center",color:"#9ca3af",fontSize:13}}>
+          Select a staff member to view their detail schedule
+        </div>
+      ) : (
+        <div style={{overflowX:"auto"}}>
+          <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+            <thead>
+              <tr>
+                <th style={{...thStyle,width:90}}>Date</th>
+                <th style={{...thStyle,width:50}}>Day</th>
+                <th style={{...thStyle,width:80,textAlign:"center"}}>Work Hrs</th>
+                {usedNWCodes.map(code => {
+                  const nw = nonWorkTypes.find(n=>n.code===code);
+                  return (
+                    <th key={code} style={{...thStyle,textAlign:"center",color:nw?.color||"#6b7280"}}>
+                      {code}
+                    </th>
+                  );
+                })}
+                <th style={{...thStyle,width:40,textAlign:"center"}}>EC</th>
+                <th style={thStyle}>Comment</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map(r => {
+                const date = new Date(r.ds+"T12:00:00");
+                const dow = date.getDay();
+                const isWeekend = dow===0||dow===6;
+                const rowBg = r.empty ? (isWeekend?"#f9fafb":"#fff") : "#fff";
+                return (
+                  <tr key={r.ds} style={{background:rowBg,borderBottom:"1px solid #f3f4f6"}}>
+                    <td style={{padding:"6px 12px",color:"#374151",fontWeight:isWeekend?400:600,
+                      fontSize:12,color:isWeekend?"#9ca3af":"#374151"}}>
+                      {date.toLocaleDateString("en-US",{month:"short",day:"numeric"})}
+                    </td>
+                    <td style={{padding:"6px 12px",fontSize:11,fontWeight:600,
+                      color:isWeekend?"#d1d5db":"#6b7280"}}>
+                      {DOW[dow]}
+                    </td>
+                    <td style={{padding:"6px 12px",textAlign:"center",fontWeight:700,
+                      color:r.workHrs?"#1e3a5f":"#d1d5db"}}>
+                      {r.empty||!r.workHrs ? "" : `${r.workHrs}h`}
+                    </td>
+                    {usedNWCodes.map(code => {
+                      const nw = nonWorkTypes.find(n=>n.code===code);
+                      const h = r.nwHrs?.[code];
+                      return (
+                        <td key={code} style={{padding:"6px 12px",textAlign:"center",
+                          fontWeight:h?700:400,color:h?(nw?.color||"#374151"):"#d1d5db"}}>
+                          {h ? `${h}h` : ""}
+                        </td>
+                      );
+                    })}
+                    <td style={{padding:"6px 12px",textAlign:"center"}}>
+                      {r.isEC ? "⭐" : ""}
+                    </td>
+                    <td style={{padding:"6px 12px",fontSize:11,color:"#6b7280",fontStyle:r.comment?"normal":"italic"}}>
+                      {r.comment||""}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+          {rows.every(r=>r.empty) && (
+            <div style={{padding:30,textAlign:"center",color:"#9ca3af",fontSize:13}}>
+              No entries found for {selectedStaff?.name} in this period.
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
