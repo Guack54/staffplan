@@ -1372,9 +1372,11 @@ export default function StaffingApp() {
 
         {/* Week nav */}
         {activeTab==="grid" && <>
-          <button onClick={prevWeek} style={navBtn}>←</button>
+          <button onClick={prevWeek} title="Previous week" style={navBtn}>←</button>
+          <button onClick={prevDay}  title="Back 1 day"    style={{...navBtn,fontSize:11,padding:"4px 8px",opacity:0.75}}>‹</button>
           <span style={{fontSize:14,fontWeight:700,color:"#1e3a5f",minWidth:180}}>{weekLabel}</span>
-          <button onClick={nextWeek} style={navBtn}>→</button>
+          <button onClick={nextDay}  title="Forward 1 day" style={{...navBtn,fontSize:11,padding:"4px 8px",opacity:0.75}}>›</button>
+          <button onClick={nextWeek} title="Next week"     style={navBtn}>→</button>
           <input type="date" value={fmt(weekStart)}
             onChange={e => { if(e.target.value) setWeekStart(startOfWeek(new Date(e.target.value+"T12:00:00"))); }}
             style={{padding:"4px 8px",borderRadius:8,border:"1px solid #bfdbfe",fontSize:12,fontWeight:600,color:"#1d4ed8",background:"#eff6ff",cursor:"pointer"}}
@@ -1445,7 +1447,6 @@ export default function StaffingApp() {
             dayNotes={dayNotes} updateDayNotes={updateDayNotes} getDayAlerts={getDayAlerts} canEdit={canEdit} isStaffRole={isStaffRole} />
         )}
         {activeTab==="grid" && (
-          <div style={{overflowX:"auto",WebkitOverflowScrolling:"touch"}}>
           <WeekGrid filteredStaff={filteredStaff} weekDates={weekDates} getEntry={getEntry} getDayFTE={getDayFTE}
             nwMap={nwMap} setEditingCell={setEditingCell} setDrillDay={setDrillDay}
             editingName={editingName} setEditingName={setEditingName} tempName={tempName} setTempName={setTempName}
@@ -1453,7 +1454,6 @@ export default function StaffingApp() {
             dayNotes={dayNotes} updateDayNotes={updateDayNotes} alertSettings={alertSettings}
             getDailyStats={getDailyStats} setDailyStat={setDailyStat} setHoliday={setHoliday} todayStr={todayStr}
             canEdit={canEdit} competencies={competencies} filterCompetencies={filterCompetencies} setFilterCompetencies={setFilterCompetencies} isStaffRole={isStaffRole} />
-          </div>
         )}
         {activeTab==="month" && (
           <MonthView year={monthView.year} month={monthView.month} staff={staff} getEntry={getEntry}
@@ -2900,11 +2900,11 @@ function WeekGrid({ filteredStaff, weekDates, getEntry, getDayFTE, nwMap, setEdi
   }, [filteredStaff, weekDates, getEntry]);
 
   return (
-    <div style={{overflowX:"auto",overflowY:"auto",maxHeight:"calc(100vh - 220px)",WebkitOverflowScrolling:"touch"}}>
-      <table style={{borderCollapse:"separate",borderSpacing:0,minWidth:1100}}>
+    <div style={{overflowX:"auto",overflowY:"auto",maxHeight:"calc(100vh - 220px)"}}>
+      <table style={{width:"100%",borderCollapse:"separate",borderSpacing:0,minWidth:860}}>
         <thead style={{position:"sticky",top:0,zIndex:20}}>
           <tr>
-            <th style={{...thS,minWidth:160,background:"#fff",position:"sticky",left:0,zIndex:30,textAlign:"left",paddingLeft:12,boxShadow:"2px 0 4px rgba(0,0,0,0.06)"}}>
+            <th style={{...thS,minWidth:155,background:"#fff",position:"sticky",left:0,zIndex:30,textAlign:"left",paddingLeft:12}}>
               <div style={{display:"flex",alignItems:"center",gap:6}}>
                 <span>Staff Member</span>
                 {hourMismatches.length > 0 ? (
@@ -2939,7 +2939,7 @@ function WeekGrid({ filteredStaff, weekDates, getEntry, getDayFTE, nwMap, setEdi
               const alerts = getDayAlerts ? getDayAlerts(ds) : [];
               const isToday = ds === todayStr;
               return (
-                <th key={i} style={{...thS,background:isToday?"#fef08a":we?"#faf5ff":"#fff",minWidth:120,borderBottom:isToday?"3px solid #ca8a04":alerts.length?"3px solid "+(alerts[0].severity==="red"?"#ef4444":"#f59e0b"):"",outline:isToday?"2px solid #ca8a04":"none",outlineOffset:"-2px"}}>
+                <th key={i} style={{...thS,background:isToday?"#fef08a":we?"#faf5ff":"#fff",minWidth:130,borderBottom:isToday?"3px solid #ca8a04":alerts.length?"3px solid "+(alerts[0].severity==="red"?"#ef4444":"#f59e0b"):"",outline:isToday?"2px solid #ca8a04":"none",outlineOffset:"-2px"}}>
                   {/* Holiday toggle */}
                   {getDailyStats && (() => {
                     const isHoliday = getDailyStats(ds)?.holiday;
@@ -3752,7 +3752,7 @@ function MasterScheduleView({ staff, filterTeam }) {
                   <td style={{
                     padding:compact?"3px 8px":"6px 10px",
                     whiteSpace:"nowrap", borderRight:"1px solid #f3f4f6",
-                    position:"sticky", left:0, background:"inherit", zIndex:1, boxShadow:"2px 0 4px rgba(0,0,0,0.04)"
+                    position:"sticky", left:0, background:"inherit", zIndex:1
                   }}>
                     <div style={{display:"flex",alignItems:"center",gap:5}}>
                       <span style={{width:6,height:6,borderRadius:"50%",background:homeTc?.dot,flexShrink:0,display:"inline-block"}} />
