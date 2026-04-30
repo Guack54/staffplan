@@ -1373,9 +1373,9 @@ export default function StaffingApp() {
         {/* Week nav */}
         {activeTab==="grid" && <>
           <button onClick={prevWeek} title="Previous week" style={navBtn}>←</button>
-          <button onClick={prevDay}  title="Back 1 day"    style={{...navBtn,fontSize:11,padding:"4px 8px",opacity:0.75}}>‹</button>
+          <button onClick={()=>{const d=new Date(weekStart);d.setDate(d.getDate()-1);setWeekStart(d);}} title="Back 1 day" style={{...navBtn,fontSize:11,padding:"4px 8px",opacity:0.75}}>‹</button>
           <span style={{fontSize:14,fontWeight:700,color:"#1e3a5f",minWidth:180}}>{weekLabel}</span>
-          <button onClick={nextDay}  title="Forward 1 day" style={{...navBtn,fontSize:11,padding:"4px 8px",opacity:0.75}}>›</button>
+          <button onClick={()=>{const d=new Date(weekStart);d.setDate(d.getDate()+1);setWeekStart(d);}} title="Forward 1 day" style={{...navBtn,fontSize:11,padding:"4px 8px",opacity:0.75}}>›</button>
           <button onClick={nextWeek} title="Next week"     style={navBtn}>→</button>
           <input type="date" value={fmt(weekStart)}
             onChange={e => { if(e.target.value) setWeekStart(startOfWeek(new Date(e.target.value+"T12:00:00"))); }}
