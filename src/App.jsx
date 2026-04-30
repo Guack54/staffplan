@@ -1669,7 +1669,7 @@ function DayView({ date, staff, getEntry, setEntrySegments, getDailyStats, setDa
         {(() => {
           const totalCensus = TEAMS.reduce((sum, t) => sum + (Number(stats.census?.[t]) || 0), 0);
           return (
-            <div style={{ background: we ? "#faf5ff" : "#fff", border: "1px solid " + (we ? "#e9d5ff" : "#e5e7eb"), borderRadius: 12, padding: "10px 12px", display: "flex", flexDirection: "column", justifyContent: "center" }}>
+            <div style={{ background: we ? "#ddd6fe" : "#fff", border: "1px solid " + (we ? "#c4b5fd" : "#e5e7eb"), borderRadius: 12, padding: "10px 12px", display: "flex", flexDirection: "column", justifyContent: "center" }}>
               <div style={{ fontSize: 9, color: "#9ca3af", fontWeight: 700, textTransform: "uppercase", marginBottom: 2 }}>Total FTE</div>
               <div style={{ fontSize: 22, fontWeight: 800, color: "#1e3a5f", lineHeight: 1 }}>{fte.total}</div>
               <div style={{ fontSize: 9, color: "#9ca3af", marginTop: 3 }}>{staffOnDuty.length} on duty</div>
@@ -2025,7 +2025,7 @@ function MonthView({ year, month, staff, getEntry, getDayFTE, nwMap, setDrillDay
                 onMouseLeave={() => setHovered(null)}
                 style={{
                   minHeight: 110, padding: "8px 10px", cursor: "pointer",
-                  background: isHov ? "#f0f9ff" : isToday ? "#fef08a" : we ? "#faf5ff" : getFTEColor(data.fte.total),
+                  background: isHov ? "#f0f9ff" : isToday ? "#fef08a" : we ? "#ddd6fe" : getFTEColor(data.fte.total),
                   borderLeft: di > 0 ? "1px solid #f3f4f6" : "none",
                   transition: "background 0.1s",
                   position: "relative"
@@ -2939,7 +2939,7 @@ function WeekGrid({ filteredStaff, weekDates, getEntry, getDayFTE, nwMap, setEdi
               const alerts = getDayAlerts ? getDayAlerts(ds) : [];
               const isToday = ds === todayStr;
               return (
-                <th key={i} style={{...thS,background:isToday?"#fef08a":we?"#faf5ff":"#fff",minWidth:130,borderBottom:isToday?"3px solid #ca8a04":alerts.length?"3px solid "+(alerts[0].severity==="red"?"#ef4444":"#f59e0b"):"",outline:isToday?"2px solid #ca8a04":"none",outlineOffset:"-2px"}}>
+                <th key={i} style={{...thS,background:isToday?"#fef08a":we?"#ddd6fe":"#fff",minWidth:130,borderBottom:isToday?"3px solid #ca8a04":alerts.length?"3px solid "+(alerts[0].severity==="red"?"#ef4444":"#f59e0b"):"",outline:isToday?"2px solid #ca8a04":"none",outlineOffset:"-2px"}}>
                   {/* Holiday toggle */}
                   {getDailyStats && (() => {
                     const isHoliday = getDailyStats(ds)?.holiday;
@@ -3166,7 +3166,7 @@ function YearView({ year, staff, getEntry, getDayFTE, nwMap, setWeekStart, setAc
 
   const getDayColor = useCallback((date) => {
     const ds = fmt(date); const fte = getDayFTE(ds); const val = Number(fte.total);
-    if (isWeekend(date)) return "#f5f3ff";
+    if (isWeekend(date)) return "#ddd6fe";
     if (val === 0) return "#f9fafb";
     if (metric==="fte") {
       const maxFTE = staff.length; const pct = Math.min(val / (maxFTE * 0.5), 1);
@@ -3200,7 +3200,7 @@ function YearView({ year, staff, getEntry, getDayFTE, nwMap, setWeekStart, setAc
         <div style={{marginLeft:"auto",display:"flex",gap:6,alignItems:"center",fontSize:11,color:"#6b7280"}}>
           <span style={{width:12,height:12,background:"#dbeafe",borderRadius:2,display:"inline-block"}}></span>Low
           <span style={{width:12,height:12,background:"#3b82f6",borderRadius:2,display:"inline-block",marginLeft:6}}></span>High
-          <span style={{width:12,height:12,background:"#f5f3ff",borderRadius:2,display:"inline-block",marginLeft:6}}></span>Weekend
+          <span style={{width:12,height:12,background:"#ddd6fe",borderRadius:2,display:"inline-block",marginLeft:6}}></span>Weekend
         </div>
       </div>
 
@@ -3701,7 +3701,7 @@ function MasterScheduleView({ staff, filterTeam }) {
                   <th key={d} colSpan={visibleTeams.length} style={{
                     padding:compact?"4px 2px 2px":"6px 4px 3px", textAlign:"center",
                     color:isWE?"#7c3aed":"#1e3a5f",
-                    background:isWE?"#faf5ff":"#f8fafc",
+                    background:isWE?"#ddd6fe":"#f8fafc",
                     borderLeft:"2px solid "+(isWE?"#e9d5ff":"#e5e7eb"),
                     borderBottom:"1px solid "+(isWE?"#e9d5ff":"#e5e7eb"),
                   }}>
@@ -3784,7 +3784,7 @@ function MasterScheduleView({ staff, filterTeam }) {
                       return (
                         <td key={d+team} style={{
                           padding:compact?"2px":"4px 3px", textAlign:"center",
-                          background: isWE ? (isWorking ? tc2?.bg : "#fdfaff") : (isWorking ? tc2?.bg+"99" : "transparent"),
+                          background: isWE ? (isWorking ? tc2?.bg : "#e9d5ff") : (isWorking ? tc2?.bg+"99" : "transparent"),
                           borderLeft:ti===0?"2px solid "+(isWE?"#e9d5ff":"#e5e7eb"):"1px solid #f3f4f6",
                         }}>
                           {isWorking ? (
@@ -5278,7 +5278,7 @@ function StaffTab({ staff, updateStaff, entries, updateEntries, weekStart, nonWo
                       const isWE = di === 0 || di === 6;
                       const isOff = Number(dayEntry.hours) === 0;
                       return (
-                        <div key={di} style={{ borderRadius: 8, border: "2px solid " + (isWE ? "#d8b4fe" : isOff ? "#e5e7eb" : dayTc?.dot||"#3b82f6"), background: isWE ? "#faf5ff" : isOff ? "#f9fafb" : "#fff", padding: "10px 8px", display: "flex", flexDirection: "column", gap: 6 }}>
+                        <div key={di} style={{ borderRadius: 8, border: "2px solid " + (isWE ? "#d8b4fe" : isOff ? "#e5e7eb" : dayTc?.dot||"#3b82f6"), background: isWE ? "#ddd6fe" : isOff ? "#f9fafb" : "#fff", padding: "10px 8px", display: "flex", flexDirection: "column", gap: 6 }}>
                           <div style={{ fontSize: 11, fontWeight: 800, color: isWE ? "#7c3aed" : isOff ? "#9ca3af" : "#374151", textAlign: "center", textTransform: "uppercase", letterSpacing: "0.05em" }}>{DAYS[di]}</div>
                           <input type="number" min="0" max="24" step="0.5"
                             value={dayEntry.hours === 0 && isWE ? "" : dayEntry.hours}
