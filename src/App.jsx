@@ -4405,34 +4405,34 @@ function VisitsTab({ visitData, updateVisitData, staff, weekStart, getDayFTE, en
           })}
         </div>
 
-        {/* ── Section 2: Productivity Chart ── */}
-        <div style={{background:"#fff",borderRadius:14,padding:20,border:"1px solid #e5e7eb"}}>
-          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14}}>
-            <div style={{fontSize:14,fontWeight:800,color:"#1e3a5f"}}>📈 Visits / FTE / Day — Weekly Trend</div>
-            <div style={{display:"flex",gap:10,fontSize:11}}>
-              {[["Dept","#7c3aed"],["Rehab","#ef4444"],["Peds","#3b82f6"],["Acute","#10b981"]].map(([t,c])=>(
-                <span key={t} style={{display:"flex",alignItems:"center",gap:4,color:"#374151"}}>
-                  <span style={{width:12,height:3,background:c,borderRadius:2,display:"inline-block"}} />{t}
-                </span>
-              ))}
-              <span style={{display:"flex",alignItems:"center",gap:4,color:"#374151"}}>
-                <span style={{width:12,height:2,background:"#9ca3af",borderRadius:2,display:"inline-block",borderTop:"2px dashed #9ca3af"}} />Goal
-              </span>
-            </div>
+        {/* ── Section 2: Productivity Charts — 2 side by side ── */}
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16}}>
+          <div style={{background:"#fff",borderRadius:14,padding:20,border:"1px solid #e5e7eb"}}>
+            <div style={{fontSize:14,fontWeight:800,color:"#1e3a5f",marginBottom:14}}>📈 Dept Total — V/FTE/Day</div>
+            <SVGLineChart
+              data={chartData}
+              lines={[{key:"dept", label:"Dept Total", color:"#7c3aed", width:3}]}
+              goalLine={DEPT_GOAL_DAY}
+              goalLabel={"Goal " + DEPT_GOAL_DAY.toFixed(2)}
+              height={240}
+              yLabel="v/FTE/day"
+            />
           </div>
-          <SVGLineChart
-            data={chartData}
-            lines={[
-              {key:"dept",  label:"Dept",  color:"#7c3aed", width:3},
-              {key:"Rehab", label:"Rehab", color:"#ef4444", width:2},
-              {key:"Peds",  label:"Peds",  color:"#3b82f6", width:2},
-              {key:"Acute", label:"Acute", color:"#10b981", width:2},
-            ]}
-            goalLine={DEPT_GOAL_DAY}
-            goalLabel={"Goal " + DEPT_GOAL_DAY.toFixed(2)}
-            height={280}
-            yLabel="v/FTE/day"
-          />
+          <div style={{background:"#fff",borderRadius:14,padding:20,border:"1px solid #e5e7eb"}}>
+            <div style={{fontSize:14,fontWeight:800,color:"#1e3a5f",marginBottom:14}}>📈 By Team — V/FTE/Day</div>
+            <SVGLineChart
+              data={chartData}
+              lines={[
+                {key:"Rehab", label:"Rehab", color:"#ef4444", width:2},
+                {key:"Peds",  label:"Peds",  color:"#3b82f6", width:2},
+                {key:"Acute", label:"Acute", color:"#10b981", width:2},
+              ]}
+              goalLine={DEPT_GOAL_DAY}
+              goalLabel={"Goal " + DEPT_GOAL_DAY.toFixed(2)}
+              height={240}
+              yLabel="v/FTE/day"
+            />
+          </div>
         </div>
 
         {/* ── Section 3: Census — 2 charts ── */}
