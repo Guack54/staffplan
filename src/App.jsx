@@ -4223,7 +4223,6 @@ function VisitsTab({ visitData, updateVisitData, staff, weekStart, getDayFTE, en
   const chartData = useMemo(() => {
     return viewWeeks.map(({wStart, wEnd, rec}) => {
       const label = new Date(wStart+"T12:00:00").toLocaleDateString("en-US",{month:"short",day:"numeric"});
-      // Sum FTE across all 7 days of this week
       let totalFTE = 0;
       const teamFTE = {Rehab:0,Peds:0,Acute:0};
       for (let di=0; di<7; di++) {
@@ -4247,6 +4246,22 @@ function VisitsTab({ visitData, updateVisitData, staff, weekStart, getDayFTE, en
       return pt;
     });
   }, [viewWeeks, viewStart, viewEnd, getDayFTE]);
+
+  // ── Chart data: evals vs follow-ups by team ──
+  const evalFollowupData = useMemo(() => {
+    return viewWeeks.map(({wStart, rec}) => {
+      const label = new Date(wStart+"T12:00:00").toLocaleDateString("en-US",{month:"short",day:"numeric"});
+      const pt = { label, wStart };
+      TEAMS.forEach(t => {
+        const evals = rec[t]?.evals || 0;
+        const visits = rec[t]?.visits || 0;
+        const followups = Math.max(0, visits - evals);
+        pt[t+"_evals"] = evals || null;
+        pt[t+"_followups"] = followups || null;
+      });
+      return pt;
+    });
+  }, [viewWeeks]);
 
   // ── Chart data: weekly census by team ──
   const censusChartData = useMemo(() => {
@@ -4483,7 +4498,33 @@ function VisitsTab({ visitData, updateVisitData, staff, weekStart, getDayFTE, en
           </div>
         </div>
 
-        {/* ── Section 4: Weekly history table (condensed) ── */}
+        {/* ── Section 5: Evals vs Follow-ups by Team ── */}
+        <div style={{background:"#fff",borderRadius:14,padding:"16px 20px",border:"1px solid #e5e7eb"}}>
+          <div style={{fontSize:14,fontWeight:800,color:"#1e3a5f",marginBottom:4}}>📊 Evals vs Follow-up Sessions — by Team</div>
+          <div style={{fontSize:11,color:"#6b7280",marginBottom:16}}>Follow-ups = Total Visits − Evals · Click legend to toggle</div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:16}}>
+            {TEAMS.map(t => {
+              const tc = TEAM_COLORS[t];
+              return (
+                <div key={t}>
+                  <div style={{fontSize:12,fontWeight:800,color:tc.text,textTransform:"uppercase",letterSpacing:"0.04em",marginBottom:8,
+                    padding:"4px 10px",background:tc.bg,borderRadius:7,display:"inline-block"}}>{t}</div>
+                  <SVGLineChart
+                    data={evalFollowupData}
+                    lines={[
+                      {key:t+"_evals",    label:"Evals",      color:tc.dot,    width:2},
+                      {key:t+"_followups",label:"Follow-ups",  color:tc.text,   width:2},
+                    ]}
+                    height={200}
+                    yLabel="count"
+                  />
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* ── Section 6: Weekly history table (condensed) ── */}
         <div style={{background:"#fff",borderRadius:14,padding:20,border:"1px solid #e5e7eb"}}>
           <div style={{fontSize:14,fontWeight:800,color:"#1e3a5f",marginBottom:14}}>📋 Weekly History</div>
           <div style={{overflowX:"auto"}}>
