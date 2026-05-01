@@ -1469,12 +1469,7 @@ export default function StaffingApp() {
           <MasterScheduleView staff={staff} filterTeam={filterTeam} />
         )}
         {activeTab==="summary" && (
-          <div style={{display:"flex",flexDirection:"column",gap:16}}>
-            <SummaryTab weekDates={weekDates} getEntry={getEntry} getDailyStats={getDailyStats} getDayFTE={getDayFTE} weeklyMetrics={weeklyMetrics} nonWorkTypes={nonWorkTypes} staff={staff} dailyStats={dailyStats} yearView={yearView} ptoAlerts={ptoAlerts} entries={entries} />
-            <div style={{borderTop:"2px solid #e5e7eb",paddingTop:16}}>
-              <VisitsTab visitData={visitData} updateVisitData={updateVisitData} staff={staff} weekStart={weekStart} getDayFTE={getDayFTE} entries={entries} dailyStats={dailyStats} nonWorkTypes={nonWorkTypes} />
-            </div>
-          </div>
+          <VisitsTab visitData={visitData} updateVisitData={updateVisitData} staff={staff} weekStart={weekStart} getDayFTE={getDayFTE} entries={entries} dailyStats={dailyStats} nonWorkTypes={nonWorkTypes} ptoAlerts={ptoAlerts} />
         )}
         {activeTab==="timesheet" && (
           <TimesheetTab staff={staff} entries={entries} weekStart={weekStart} nonWorkTypes={nonWorkTypes} />
@@ -4078,7 +4073,7 @@ function getWeekStartFromKey(key) {
   return parts[1] || parts[0];
 }
 
-function VisitsTab({ visitData, updateVisitData, staff, weekStart, getDayFTE, entries={}, dailyStats={}, nonWorkTypes=[] }) {
+function VisitsTab({ visitData, updateVisitData, staff, weekStart, getDayFTE, entries={}, dailyStats={}, nonWorkTypes=[], ptoAlerts=[] }) {
   const today = new Date(); today.setHours(0,0,0,0);
 
   // Entry state — which week is being edited
@@ -4304,6 +4299,28 @@ function VisitsTab({ visitData, updateVisitData, staff, weekStart, getDayFTE, en
 
   return (
     <div style={{display:"grid",gap:16}}>
+
+      {/* ── PTO Alerts ── */}
+      {ptoAlerts.length > 0 && (
+        <div style={{background:"#fff",borderRadius:12,padding:"12px 16px",border:"1px solid #fca5a5"}}>
+          <div style={{fontSize:13,fontWeight:800,color:"#dc2626",marginBottom:10}}>⚠ Sick Time Alerts ({ptoAlerts.length})</div>
+          <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+            {ptoAlerts.map((a,i) => {
+              const tc = TEAM_COLORS[a.team]; const isOver = a.overBy > 0;
+              return (
+                <div key={i} style={{display:"flex",alignItems:"center",gap:8,padding:"6px 12px",borderRadius:9,
+                  background:isOver?"#fef2f2":"#fffbeb",border:"1px solid "+(isOver?"#fca5a5":"#fde68a")}}>
+                  <span style={{width:7,height:7,borderRadius:"50%",background:tc?.dot,display:"inline-block"}} />
+                  <span style={{fontSize:12,fontWeight:700,color:"#111827"}}>{a.staffName}</span>
+                  <span style={{fontSize:11,fontWeight:700,color:isOver?"#dc2626":"#d97706"}}>
+                    {a.usedHrs}h / {a.limit}h {isOver?"🔴 "+a.overBy+"h over":"🟡 90%+"}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {/* ── Timeframe selector ── */}
       <div style={{background:"#fff",borderRadius:12,padding:"12px 16px",border:"1px solid #e5e7eb",display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
