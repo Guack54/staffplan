@@ -4091,7 +4091,8 @@ function VisitsTab({ visitData, updateVisitData, staff, weekStart, getDayFTE, en
     setQuickRange(range);
     const t = new Date(); t.setHours(0,0,0,0);
     const thisSun = new Date(t); thisSun.setDate(t.getDate() - t.getDay());
-    if (range === "4w")  { const d = new Date(thisSun); d.setDate(d.getDate()-28); setViewStart(fmt(d)); setViewEnd(fmt(t)); }
+    if (range === "lastweek") { const s=new Date(thisSun); s.setDate(s.getDate()-7); const e=new Date(s); e.setDate(e.getDate()+6); setViewStart(fmt(s)); setViewEnd(fmt(e)); }
+    else if (range === "4w")  { const d = new Date(thisSun); d.setDate(d.getDate()-28); setViewStart(fmt(d)); setViewEnd(fmt(t)); }
     else if (range === "8w")  { const d = new Date(thisSun); d.setDate(d.getDate()-56); setViewStart(fmt(d)); setViewEnd(fmt(t)); }
     else if (range === "12w") { const d = new Date(thisSun); d.setDate(d.getDate()-84); setViewStart(fmt(d)); setViewEnd(fmt(t)); }
     else if (range === "ytd")  { setViewStart(`${t.getFullYear()}-01-01`); setViewEnd(fmt(t)); }
@@ -4263,8 +4264,10 @@ function VisitsTab({ visitData, updateVisitData, staff, weekStart, getDayFTE, en
           days++;
         }
       }
+      const total = days>0 ? +((teamCensus.Rehab+teamCensus.Peds+teamCensus.Acute)/days).toFixed(1) : null;
       return {
         label, wStart,
+        Total: total,
         Rehab: days>0 ? +(teamCensus.Rehab/days).toFixed(1) : null,
         Peds:  days>0 ? +(teamCensus.Peds/days).toFixed(1)  : null,
         Acute: days>0 ? +(teamCensus.Acute/days).toFixed(1) : null,
@@ -4278,6 +4281,7 @@ function VisitsTab({ visitData, updateVisitData, staff, weekStart, getDayFTE, en
       const label = new Date(wStart+"T12:00:00").toLocaleDateString("en-US",{month:"short",day:"numeric"});
       const byCode = {};
       nonWorkTypes.forEach(n => { byCode[n.code] = 0; });
+      let workHrs = 0;
       for (let di=0; di<7; di++) {
         const d = new Date(wStart+"T12:00:00"); d.setDate(d.getDate()+di);
         const ds = fmt(d);
@@ -4286,11 +4290,12 @@ function VisitsTab({ visitData, updateVisitData, staff, weekStart, getDayFTE, en
           const raw = entries[`${s.id}_${ds}`];
           const segs = raw ? (Array.isArray(raw)?raw:[raw]) : [];
           segs.forEach(e => {
+            workHrs += Number(e.hours)||0;
             if (e.nonWork) byCode[e.nonWork] = (byCode[e.nonWork]||0) + (Number(e.nonWorkHours)||Number(e.hours)||8);
           });
         });
       }
-      return { label, wStart, ...byCode };
+      return { label, wStart, _workHrs: workHrs, ...byCode };
     });
   }, [viewWeeks, viewStart, viewEnd, entries, staff, nonWorkTypes]);
 
@@ -4325,7 +4330,7 @@ function VisitsTab({ visitData, updateVisitData, staff, weekStart, getDayFTE, en
       <div style={{background:"#fff",borderRadius:12,padding:"12px 16px",border:"1px solid #e5e7eb",display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
         <div style={{fontSize:13,fontWeight:700,color:"#1e3a5f",flexShrink:0}}>📅 Timeframe</div>
         <div style={{display:"flex",gap:4,background:"#f1f5f9",borderRadius:8,padding:3}}>
-          {[["4w","4 Weeks"],["8w","8 Weeks"],["12w","12 Weeks"],["ytd","YTD"],["year","Full Year"],["custom","Custom"]].map(([v,l])=>(
+          {[["lastweek","Last Week"],["4w","4 Weeks"],["8w","8 Weeks"],["12w","12 Weeks"],["ytd","YTD"],["year","Full Year"],["custom","Custom"]].map(([v,l])=>(
             <button key={v} onClick={()=>applyQuick(v)} style={{
               padding:"4px 11px",borderRadius:6,fontSize:11,fontWeight:600,border:"none",cursor:"pointer",
               background:quickRange===v?"#fff":"transparent",
@@ -4430,12 +4435,19 @@ function VisitsTab({ visitData, updateVisitData, staff, weekStart, getDayFTE, en
           />
         </div>
 
-        {/* ── Section 3: Census + NW Trends side by side ── */}
+        {/* ── Section 3: Census — 2 charts ── */}
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16}}>
-
-          {/* Census trends */}
           <div style={{background:"#fff",borderRadius:14,padding:20,border:"1px solid #e5e7eb"}}>
-            <div style={{fontSize:14,fontWeight:800,color:"#1e3a5f",marginBottom:14}}>🏥 Avg Daily Census — Weekly</div>
+            <div style={{fontSize:14,fontWeight:800,color:"#1e3a5f",marginBottom:14}}>🏥 Total Census — Weekly Avg</div>
+            <SVGLineChart
+              data={censusChartData}
+              lines={[{key:"Total", label:"Total Census", color:"#1e3a5f", width:3}]}
+              height={200}
+              yLabel="avg census"
+            />
+          </div>
+          <div style={{background:"#fff",borderRadius:14,padding:20,border:"1px solid #e5e7eb"}}>
+            <div style={{fontSize:14,fontWeight:800,color:"#1e3a5f",marginBottom:14}}>🏥 Census by Team — Weekly Avg</div>
             <SVGLineChart
               data={censusChartData}
               lines={[
@@ -4443,18 +4455,29 @@ function VisitsTab({ visitData, updateVisitData, staff, weekStart, getDayFTE, en
                 {key:"Peds",  label:"Peds",  color:"#3b82f6", width:2},
                 {key:"Acute", label:"Acute", color:"#10b981", width:2},
               ]}
-              height={220}
+              height={200}
               yLabel="avg census"
             />
           </div>
+        </div>
 
-          {/* Non-work trends */}
+        {/* ── Section 4: Hours — Work + NW ── */}
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16}}>
+          <div style={{background:"#fff",borderRadius:14,padding:20,border:"1px solid #e5e7eb"}}>
+            <div style={{fontSize:14,fontWeight:800,color:"#1e3a5f",marginBottom:14}}>⏱ Total Work Hours — Weekly</div>
+            <SVGLineChart
+              data={nwChartData}
+              lines={[{key:"_workHrs", label:"Work Hours", color:"#1e3a5f", width:3}]}
+              height={200}
+              yLabel="hours"
+            />
+          </div>
           <div style={{background:"#fff",borderRadius:14,padding:20,border:"1px solid #e5e7eb"}}>
             <div style={{fontSize:14,fontWeight:800,color:"#1e3a5f",marginBottom:14}}>🏖 Non-Work Hours — Weekly</div>
             <SVGBarChart
               data={nwChartData}
               bars={nonWorkTypes.map(nw=>({key:nw.code, label:nw.label, color:nw.color}))}
-              height={220}
+              height={200}
               yLabel="hours"
             />
           </div>
@@ -6886,11 +6909,14 @@ function SVGLineChart({ data, lines, goalLine, goalLabel, height=260, yLabel="" 
 // ─── SVG Stacked Bar Chart ────────────────────────────────────────────────────
 function SVGBarChart({ data, bars, height=220, yLabel="" }) {
   const [tooltip, setTooltip] = useState(null);
+  const [hiddenBars, setHiddenBars] = useState(new Set());
+  const toggleBar = (key) => setHiddenBars(prev => { const n=new Set(prev); n.has(key)?n.delete(key):n.add(key); return n; });
+  const visibleBars = bars.filter(b => !hiddenBars.has(b.key));
   const W = 800, H = height, PAD = { top:20, right:20, bottom:36, left:44 };
   const chartW = W - PAD.left - PAD.right;
   const chartH = H - PAD.top - PAD.bottom;
 
-  const maxY = data.length ? Math.ceil(Math.max(...data.map(d => bars.reduce((a,b)=>a+(d[b.key]||0),0))) * 1.15) : 10;
+  const maxY = data.length ? Math.ceil(Math.max(...data.map(d => visibleBars.reduce((a,b)=>a+(d[b.key]||0),0))) * 1.15) || 10 : 10;
   const scaleY = v => chartH - (v / maxY) * chartH;
   const barW = Math.max(4, (chartW / Math.max(data.length,1)) * 0.7);
   const xStep = data.length > 12 ? Math.ceil(data.length / 8) : 1;
@@ -6899,7 +6925,6 @@ function SVGBarChart({ data, bars, height=220, yLabel="" }) {
     <div style={{position:"relative",width:"100%"}}>
       <svg viewBox={`0 0 ${W} ${H}`} style={{width:"100%",height:height,overflow:"visible"}}>
         <g transform={`translate(${PAD.left},${PAD.top})`}>
-          {/* Grid */}
           {[0,0.25,0.5,0.75,1].map((pct,i) => {
             const v = maxY * pct; const y = scaleY(v);
             return <g key={i}>
@@ -6907,13 +6932,12 @@ function SVGBarChart({ data, bars, height=220, yLabel="" }) {
               <text x={-6} y={y+4} fontSize={9} fill="#9ca3af" textAnchor="end">{v.toFixed(0)}</text>
             </g>;
           })}
-          {/* Bars */}
           {data.map((d,i) => {
             const x = (i / Math.max(data.length,1)) * chartW + (chartW / Math.max(data.length,1) - barW) / 2;
             let yOffset = chartH;
             return (
               <g key={i} onMouseEnter={()=>setTooltip({i,x,d})} onMouseLeave={()=>setTooltip(null)}>
-                {bars.map(b => {
+                {visibleBars.map(b => {
                   const v = d[b.key] || 0;
                   if (v <= 0) return null;
                   const bH = (v / maxY) * chartH;
@@ -6926,10 +6950,9 @@ function SVGBarChart({ data, bars, height=220, yLabel="" }) {
               </g>
             );
           })}
-          {/* Tooltip */}
           {tooltip && (() => {
             const tx = Math.min(tooltip.x, chartW - 130);
-            const activeBars = bars.filter(b => (tooltip.d[b.key]||0) > 0);
+            const activeBars = visibleBars.filter(b => (tooltip.d[b.key]||0) > 0);
             return (
               <g>
                 <rect x={tx} y={4} width={125} height={activeBars.length*16+20} rx={6} fill="white" stroke="#e5e7eb" strokeWidth={1} />
@@ -6945,13 +6968,18 @@ function SVGBarChart({ data, bars, height=220, yLabel="" }) {
           })()}
         </g>
       </svg>
-      {/* Legend */}
+      {/* Legend — click to toggle */}
       <div style={{display:"flex",gap:10,flexWrap:"wrap",marginTop:4,paddingLeft:44}}>
-        {bars.map(b=>(
-          <span key={b.key} style={{display:"flex",alignItems:"center",gap:4,fontSize:10,color:"#374151"}}>
-            <span style={{width:10,height:10,background:b.color,borderRadius:2,display:"inline-block"}} />{b.label}
-          </span>
-        ))}
+        {bars.map(b=>{
+          const isHidden = hiddenBars.has(b.key);
+          return (
+            <span key={b.key} onClick={()=>toggleBar(b.key)} style={{display:"flex",alignItems:"center",gap:4,fontSize:10,
+              color:isHidden?"#d1d5db":"#374151",cursor:"pointer",userSelect:"none",
+              textDecoration:isHidden?"line-through":"none"}}>
+              <span style={{width:10,height:10,background:isHidden?"#d1d5db":b.color,borderRadius:2,display:"inline-block"}} />{b.label}
+            </span>
+          );
+        })}
       </div>
     </div>
   );
