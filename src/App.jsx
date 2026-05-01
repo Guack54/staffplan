@@ -1,4 +1,5 @@
 import { useState, useMemo, useRef, useEffect, useCallback } from "react";
+import { LineChart, BarChart, Line, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ReferenceLine, ResponsiveContainer } from "recharts";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 const TEAMS = ["Rehab", "Peds", "Acute"];
@@ -1472,7 +1473,7 @@ export default function StaffingApp() {
           <div style={{display:"flex",flexDirection:"column",gap:16}}>
             <SummaryTab weekDates={weekDates} getEntry={getEntry} getDailyStats={getDailyStats} getDayFTE={getDayFTE} weeklyMetrics={weeklyMetrics} nonWorkTypes={nonWorkTypes} staff={staff} dailyStats={dailyStats} yearView={yearView} ptoAlerts={ptoAlerts} entries={entries} />
             <div style={{borderTop:"2px solid #e5e7eb",paddingTop:16}}>
-              <VisitsTab visitData={visitData} updateVisitData={updateVisitData} staff={staff} weekStart={weekStart} getDayFTE={getDayFTE} />
+              <VisitsTab visitData={visitData} updateVisitData={updateVisitData} staff={staff} weekStart={weekStart} getDayFTE={getDayFTE} entries={entries} dailyStats={dailyStats} nonWorkTypes={nonWorkTypes} />
             </div>
           </div>
         )}
@@ -4078,7 +4079,7 @@ function getWeekStartFromKey(key) {
   return parts[1] || parts[0];
 }
 
-function VisitsTab({ visitData, updateVisitData, staff, weekStart, getDayFTE }) {
+function VisitsTab({ visitData, updateVisitData, staff, weekStart, getDayFTE, entries={}, dailyStats={}, nonWorkTypes=[] }) {
   const today = new Date(); today.setHours(0,0,0,0);
 
   // Entry state — which week is being edited
@@ -4096,21 +4097,11 @@ function VisitsTab({ visitData, updateVisitData, staff, weekStart, getDayFTE }) 
     setQuickRange(range);
     const t = new Date(); t.setHours(0,0,0,0);
     const thisSun = new Date(t); thisSun.setDate(t.getDate() - t.getDay());
-    if (range === "lastweek") {
-      const lastSun = new Date(thisSun); lastSun.setDate(thisSun.getDate() - 7);
-      const lastSat = new Date(lastSun); lastSat.setDate(lastSun.getDate() + 6);
-      setViewStart(fmt(lastSun)); setViewEnd(fmt(lastSat));
-    } else if (range === "month") {
-      const d = new Date(t); d.setDate(d.getDate()-27);
-      setViewStart(fmt(d)); setViewEnd(fmt(t));
-    } else if (range === "quarter") {
-      const d = new Date(t); d.setDate(d.getDate()-89);
-      setViewStart(fmt(d)); setViewEnd(fmt(t));
-    } else if (range === "ytd") {
-      setViewStart(`${t.getFullYear()}-01-01`); setViewEnd(fmt(t));
-    } else if (range === "year") {
-      setViewStart(`${t.getFullYear()}-01-01`); setViewEnd(`${t.getFullYear()}-12-31`);
-    }
+    if (range === "4w")  { const d = new Date(thisSun); d.setDate(d.getDate()-28); setViewStart(fmt(d)); setViewEnd(fmt(t)); }
+    else if (range === "8w")  { const d = new Date(thisSun); d.setDate(d.getDate()-56); setViewStart(fmt(d)); setViewEnd(fmt(t)); }
+    else if (range === "12w") { const d = new Date(thisSun); d.setDate(d.getDate()-84); setViewStart(fmt(d)); setViewEnd(fmt(t)); }
+    else if (range === "ytd")  { setViewStart(`${t.getFullYear()}-01-01`); setViewEnd(fmt(t)); }
+    else if (range === "year") { setViewStart(`${t.getFullYear()}-01-01`); setViewEnd(`${t.getFullYear()}-12-31`); }
   };
 
   // Load entry values when entryWeekStart changes
@@ -4231,204 +4222,255 @@ function VisitsTab({ visitData, updateVisitData, staff, weekStart, getDayFTE }) 
   const entryWeekEnd = (() => { const d = new Date(entryWeekStart+"T12:00:00"); d.setDate(d.getDate()+6); return fmt(d); })();
   const goalColor = metrics.goalPct >= 100 ? "#15803d" : metrics.goalPct >= 80 ? "#d97706" : "#dc2626";
   const goalBg    = metrics.goalPct >= 100 ? "#f0fdf4" : metrics.goalPct >= 80 ? "#fffbeb" : "#fef2f2";
+  const DEPT_GOAL_DAY = VISIT_GOAL_PER_PERSON / ANNUAL_WORK_DAYS; // 5.73
+
+  // ── Chart data: weekly visits/FTE/day per team ──
+  const chartData = useMemo(() => {
+    return viewWeeks.map(({wStart, wEnd, rec}) => {
+      const label = new Date(wStart+"T12:00:00").toLocaleDateString("en-US",{month:"short",day:"numeric"});
+      // Sum FTE across all 7 days of this week
+      let totalFTE = 0;
+      const teamFTE = {Rehab:0,Peds:0,Acute:0};
+      for (let di=0; di<7; di++) {
+        const d = new Date(wStart+"T12:00:00"); d.setDate(d.getDate()+di);
+        const ds = fmt(d);
+        if (ds < viewStart || ds > viewEnd) continue;
+        if (getDayFTE) {
+          const fte = getDayFTE(ds);
+          totalFTE += Number(fte.total)||0;
+          TEAMS.forEach(t => { teamFTE[t] += Number(fte.byTeam?.[t])||0; });
+        }
+      }
+      const totalVisits = TEAMS.reduce((a,t)=>(rec[t]?.visits||0)+a,0);
+      const pt = {
+        label, wStart,
+        dept:   totalFTE>0 ? +(totalVisits/totalFTE).toFixed(2) : null,
+        Rehab:  teamFTE.Rehab>0 ? +((rec.Rehab?.visits||0)/teamFTE.Rehab).toFixed(2) : null,
+        Peds:   teamFTE.Peds>0  ? +((rec.Peds?.visits||0)/teamFTE.Peds).toFixed(2)   : null,
+        Acute:  teamFTE.Acute>0 ? +((rec.Acute?.visits||0)/teamFTE.Acute).toFixed(2)  : null,
+      };
+      return pt;
+    });
+  }, [viewWeeks, viewStart, viewEnd, getDayFTE]);
+
+  // ── Chart data: weekly census by team ──
+  const censusChartData = useMemo(() => {
+    return viewWeeks.map(({wStart, wEnd}) => {
+      const label = new Date(wStart+"T12:00:00").toLocaleDateString("en-US",{month:"short",day:"numeric"});
+      const teamCensus = {Rehab:0,Peds:0,Acute:0};
+      let days = 0;
+      for (let di=0; di<7; di++) {
+        const d = new Date(wStart+"T12:00:00"); d.setDate(d.getDate()+di);
+        const ds = fmt(d);
+        if (ds < viewStart || ds > viewEnd) continue;
+        const stats = dailyStats[ds];
+        if (stats?.census) {
+          TEAMS.forEach(t => { teamCensus[t] += Number(stats.census[t])||0; });
+          days++;
+        }
+      }
+      return {
+        label, wStart,
+        Rehab: days>0 ? +(teamCensus.Rehab/days).toFixed(1) : null,
+        Peds:  days>0 ? +(teamCensus.Peds/days).toFixed(1)  : null,
+        Acute: days>0 ? +(teamCensus.Acute/days).toFixed(1) : null,
+      };
+    });
+  }, [viewWeeks, viewStart, viewEnd, dailyStats]);
+
+  // ── Chart data: weekly NW hours by code ──
+  const nwChartData = useMemo(() => {
+    return viewWeeks.map(({wStart, wEnd}) => {
+      const label = new Date(wStart+"T12:00:00").toLocaleDateString("en-US",{month:"short",day:"numeric"});
+      const byCode = {};
+      nonWorkTypes.forEach(n => { byCode[n.code] = 0; });
+      for (let di=0; di<7; di++) {
+        const d = new Date(wStart+"T12:00:00"); d.setDate(d.getDate()+di);
+        const ds = fmt(d);
+        if (ds < viewStart || ds > viewEnd) continue;
+        staff.forEach(s => {
+          const raw = entries[`${s.id}_${ds}`];
+          const segs = raw ? (Array.isArray(raw)?raw:[raw]) : [];
+          segs.forEach(e => {
+            if (e.nonWork) byCode[e.nonWork] = (byCode[e.nonWork]||0) + (Number(e.nonWorkHours)||Number(e.hours)||8);
+          });
+        });
+      }
+      return { label, wStart, ...byCode };
+    });
+  }, [viewWeeks, viewStart, viewEnd, entries, staff, nonWorkTypes]);
+
+  // Recharts colors
+  const RC = { Rehab:"#ef4444", Peds:"#3b82f6", Acute:"#10b981", Dept:"#7c3aed" };
+  const hasRecharts = typeof LineChart !== "undefined";
 
   return (
-    <div style={{display:"grid",gap:18}}>
+    <div style={{display:"grid",gap:16}}>
 
-      {/* ── Entry hint banner ── */}
-      <div style={{background:"#eff6ff",borderRadius:10,padding:"10px 16px",border:"1px solid #bfdbfe",display:"flex",alignItems:"center",justifyContent:"space-between",gap:12}}>
-        <div style={{fontSize:12,color:"#1e40af"}}>
-          <b>📝 Enter visit data</b> via the <b>☰ Menu → Enter Visit Data</b>
-          {saveMsg && <span style={{marginLeft:10,color:"#15803d",fontWeight:700}}>{saveMsg}</span>}
-        </div>
-        <div style={{fontSize:11,color:"#6b7280"}}>
-          Last entry: {Object.keys(visitData).length > 0
-            ? (() => { const keys = Object.keys(visitData).sort().reverse(); const rec = visitData[keys[0]]; return new Date((rec.weekStart||keys[0].replace("week_",""))+"T12:00:00").toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"}); })()
-            : "none yet"}
-        </div>
-      </div>
-
-      {/* ── Date Range for Analytics ── */}
-      <div style={{background:"#fff",borderRadius:14,padding:14,border:"1px solid #e5e7eb",display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}}>
-        <div style={{fontSize:13,fontWeight:700,color:"#1e3a5f",flexShrink:0}}>📅 View Range</div>
+      {/* ── Timeframe selector ── */}
+      <div style={{background:"#fff",borderRadius:12,padding:"12px 16px",border:"1px solid #e5e7eb",display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+        <div style={{fontSize:13,fontWeight:700,color:"#1e3a5f",flexShrink:0}}>📅 Timeframe</div>
         <div style={{display:"flex",gap:4,background:"#f1f5f9",borderRadius:8,padding:3}}>
-          {[["lastweek","Last Week"],["month","28 Days"],["quarter","Quarter"],["ytd","YTD"],["year","Full Year"]].map(([v,l])=>(
+          {[["4w","4 Weeks"],["8w","8 Weeks"],["12w","12 Weeks"],["ytd","YTD"],["year","Full Year"],["custom","Custom"]].map(([v,l])=>(
             <button key={v} onClick={()=>applyQuick(v)} style={{
               padding:"4px 11px",borderRadius:6,fontSize:11,fontWeight:600,border:"none",cursor:"pointer",
-              background:quickRange===v?"#fff":"transparent",color:quickRange===v?"#1e3a5f":"#6b7280",
+              background:quickRange===v?"#fff":"transparent",
+              color:quickRange===v?"#1e3a5f":"#6b7280",
               boxShadow:quickRange===v?"0 1px 3px rgba(0,0,0,0.1)":"none"}}>{l}</button>
           ))}
         </div>
-        <div style={{display:"flex",alignItems:"center",gap:6}}>
-          <input type="date" value={viewStart} onChange={e=>{setViewStart(e.target.value);setQuickRange("custom");}}
-            style={{padding:"4px 8px",borderRadius:7,border:"1px solid #d1d5db",fontSize:12,fontWeight:600,color:"#374151"}} />
-          <span style={{fontSize:12,color:"#9ca3af"}}>to</span>
-          <input type="date" value={viewEnd} onChange={e=>{setViewEnd(e.target.value);setQuickRange("custom");}}
-            style={{padding:"4px 8px",borderRadius:7,border:"1px solid #d1d5db",fontSize:12,fontWeight:600,color:"#374151"}} />
-        </div>
-        <div style={{fontSize:11,color:"#9ca3af",marginLeft:"auto"}}>{metrics.weeksWithData} weeks with data · {metrics.workDays} days · {metrics.hasFTEData ? `avg ${metrics.avgFTEPerDay.toFixed(1)} FTE/day` : ""}</div>
+        {quickRange==="custom" && (
+          <div style={{display:"flex",alignItems:"center",gap:6}}>
+            <input type="date" value={viewStart} onChange={e=>{setViewStart(e.target.value);setQuickRange("custom");}}
+              style={{padding:"4px 8px",borderRadius:7,border:"1px solid #d1d5db",fontSize:12}} />
+            <span style={{fontSize:11,color:"#9ca3af"}}>to</span>
+            <input type="date" value={viewEnd} onChange={e=>{setViewEnd(e.target.value);setQuickRange("custom");}}
+              style={{padding:"4px 8px",borderRadius:7,border:"1px solid #d1d5db",fontSize:12}} />
+          </div>
+        )}
+        <div style={{fontSize:11,color:"#9ca3af",marginLeft:"auto"}}>{metrics.weeksWithData} weeks · {metrics.workDays} staffed days</div>
       </div>
 
-      {/* ── Key Metrics ── */}
       {metrics.weeksWithData === 0 ? (
-        <div style={{background:"#fff",borderRadius:14,padding:32,border:"1px solid #e5e7eb",textAlign:"center",color:"#9ca3af",fontSize:13}}>
-          No visit data in this range yet. Enter data above and it will appear here.
+        <div style={{background:"#fff",borderRadius:14,padding:40,border:"1px solid #e5e7eb",textAlign:"center",color:"#9ca3af",fontSize:13}}>
+          No visit data in this range. Use ☰ Menu → Enter Visit Data to add weekly visit counts.
         </div>
       ) : (<>
 
-        {/* Annual forecast banner */}
-        <div style={{background:"linear-gradient(135deg,#1e3a5f,#1e40af)",borderRadius:14,padding:20,color:"#fff"}}>
-          <div style={{fontSize:11,color:"#93c5fd",fontWeight:600,textTransform:"uppercase",letterSpacing:"0.05em",marginBottom:4}}>
-            Annual Forecast — based on {metrics.workDays} work days · avg FTE {metrics.hasFTEData ? metrics.avgFTEPerDay.toFixed(1) : "(no FTE data)"}
-          </div>
-          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))",gap:20,marginTop:8}}>
-            <div>
-              <div style={{fontSize:11,color:"#93c5fd"}}>
-                {metrics.hasFTEData ? "Avg Visits / FTE / Day" : "Avg Visits / Day"}
-              </div>
-              <div style={{fontSize:36,fontWeight:800}}>
-                {metrics.hasFTEData ? metrics.avgVisitsPerFTEDay.toFixed(2) : metrics.avgVisitsPerDay.toFixed(1)}
-              </div>
-            </div>
-            <div>
-              <div style={{fontSize:11,color:"#93c5fd"}}>Projected Annual Total</div>
-              <div style={{fontSize:36,fontWeight:800}}>{Math.round(metrics.annualForecast).toLocaleString()}</div>
-              <div style={{fontSize:10,color:"#93c5fd"}}>
-                {metrics.hasFTEData
-                  ? `(${metrics.avgVisitsPerFTEDay.toFixed(2)} visits/FTE/day × ${ANNUAL_WORK_DAYS} days × ${metrics.avgFTEPerDay.toFixed(1)} avg FTE)`
-                  : `(${metrics.avgVisitsPerDay.toFixed(1)} visits/day × ${ANNUAL_WORK_DAYS} days)`}
-              </div>
-            </div>
-            <div>
-              <div style={{fontSize:11,color:"#93c5fd"}}>Per Therapist / Year</div>
-              <div style={{fontSize:36,fontWeight:800,color:metrics.goalPct>=100?"#6ee7b7":metrics.goalPct>=80?"#fde68a":"#fca5a5"}}>
-                {Math.round(metrics.forecastPerPerson).toLocaleString()}
-              </div>
-              <div style={{fontSize:10,color:"#93c5fd"}}>
-                {metrics.hasFTEData ? `${metrics.avgVisitsPerFTEDay.toFixed(2)} × ${ANNUAL_WORK_DAYS} days` : `÷ ${metrics.staffCount} staff`}
-              </div>
-            </div>
-            <div style={{background:goalBg,borderRadius:10,padding:"10px 16px",alignSelf:"center"}}>
-              <div style={{fontSize:11,color:goalColor,fontWeight:700}}>Dept Goal: {VISIT_GOAL_PER_PERSON.toLocaleString()}/person/yr (weighted avg)</div>
-              <div style={{fontSize:28,fontWeight:800,color:goalColor}}>{metrics.goalPct.toFixed(0)}%</div>
-              <div style={{height:6,background:goalColor+"22",borderRadius:3,marginTop:6}}>
-                <div style={{height:"100%",width:Math.min(metrics.goalPct,100)+"%",background:goalColor,borderRadius:3,transition:"width 0.4s"}} />
-              </div>
+        {/* ── Section 1: Scorecard ── */}
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))",gap:10}}>
+          {/* Visits/FTE/day */}
+          <div style={{background:"linear-gradient(135deg,#1e3a5f,#1e40af)",borderRadius:12,padding:"14px 16px",color:"#fff"}}>
+            <div style={{fontSize:9,color:"#93c5fd",fontWeight:700,textTransform:"uppercase",letterSpacing:"0.05em",marginBottom:4}}>Visits / FTE / Day</div>
+            <div style={{fontSize:32,fontWeight:800,lineHeight:1}}>{metrics.avgVisitsPerFTEDay.toFixed(2)}</div>
+            <div style={{fontSize:10,color:"#93c5fd",marginTop:4}}>Goal: {DEPT_GOAL_DAY.toFixed(2)}</div>
+            <div style={{height:3,background:"rgba(255,255,255,0.2)",borderRadius:2,marginTop:6}}>
+              <div style={{height:"100%",width:Math.min((metrics.avgVisitsPerFTEDay/DEPT_GOAL_DAY)*100,100)+"%",background:metrics.avgVisitsPerFTEDay>=DEPT_GOAL_DAY?"#6ee7b7":"#fde68a",borderRadius:2}} />
             </div>
           </div>
-        </div>
-
-        {/* Calculation breakdown — helps verify math */}
-        <div style={{background:"#fff",borderRadius:14,padding:16,border:"1px solid #e5e7eb",fontSize:11,color:"#374151"}}>
-          <div style={{fontSize:12,fontWeight:800,color:"#1e3a5f",marginBottom:10}}>📐 Calculation Breakdown</div>
-          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(200px,1fr))",gap:8}}>
-            {[
-              {label:"Total visits in range",    value: metrics.totalVisits.toLocaleString()},
-              {label:"Staffed days counted",      value: metrics.workDays},
-              {label:"Sum of FTE-days",           value: metrics.totalFTE.toFixed(1), note:"FTE summed across all staffed days"},
-              {label:"Avg FTE per staffed day",   value: metrics.avgFTEPerDay.toFixed(2)},
-              {label:"Visits / FTE-day",          value: metrics.avgVisitsPerFTEDay.toFixed(3), note:"= total visits ÷ FTE-days"},
-              {label:"× Annual work days",        value: ANNUAL_WORK_DAYS, note:"adjust this constant if needed"},
-              {label:"= Per therapist / year",    value: Math.round(metrics.forecastPerPerson).toLocaleString(), bold:true},
-            ].map(({label,value,note,bold})=>(
-              <div key={label} style={{padding:"8px 10px",borderRadius:8,background:"#f8fafc",border:"1px solid #f1f5f9"}}>
-                <div style={{fontSize:10,color:"#6b7280"}}>{label}{note && <span style={{color:"#9ca3af"}}> — {note}</span>}</div>
-                <div style={{fontSize:bold?16:14,fontWeight:bold?800:700,color:bold?"#1e3a5f":"#374151",marginTop:2}}>{value}</div>
-              </div>
-            ))}
+          {/* Forecasted visits/FTE/year */}
+          <div style={{background:goalBg,borderRadius:12,padding:"14px 16px",border:"1px solid "+goalColor+"44"}}>
+            <div style={{fontSize:9,color:goalColor,fontWeight:700,textTransform:"uppercase",letterSpacing:"0.05em",marginBottom:4}}>Forecast / FTE / Year</div>
+            <div style={{fontSize:32,fontWeight:800,color:goalColor,lineHeight:1}}>{Math.round(metrics.forecastPerPerson).toLocaleString()}</div>
+            <div style={{fontSize:10,color:goalColor,marginTop:4}}>Goal: {VISIT_GOAL_PER_PERSON.toLocaleString()} · {metrics.goalPct.toFixed(0)}% on track</div>
+            <div style={{height:3,background:goalColor+"22",borderRadius:2,marginTop:6}}>
+              <div style={{height:"100%",width:Math.min(metrics.goalPct,100)+"%",background:goalColor,borderRadius:2}} />
+            </div>
           </div>
-          <div style={{marginTop:10,padding:"8px 12px",background:"#fffbeb",borderRadius:8,border:"1px solid #fde68a",fontSize:10,color:"#92400e"}}>
-            <b>Formula:</b> (Total Visits ÷ Sum of FTE-days) × {ANNUAL_WORK_DAYS} annual days = Per Therapist/Year &nbsp;·&nbsp;
-            If this number looks high, check: (1) Is <b>ANNUAL_WORK_DAYS = {ANNUAL_WORK_DAYS}</b> correct for your dept? (2) Are weekend FTE entries inflating the FTE-day sum?
+          {/* Avg FTE */}
+          <div style={{background:"#f8fafc",borderRadius:12,padding:"14px 16px",border:"1px solid #e5e7eb"}}>
+            <div style={{fontSize:9,color:"#6b7280",fontWeight:700,textTransform:"uppercase",letterSpacing:"0.05em",marginBottom:4}}>Avg FTE / Day</div>
+            <div style={{fontSize:32,fontWeight:800,color:"#1e3a5f",lineHeight:1}}>{metrics.avgFTEPerDay.toFixed(1)}</div>
+            <div style={{fontSize:10,color:"#9ca3af",marginTop:4}}>{metrics.workDays} staffed days</div>
           </div>
-        </div>
-
-        {/* Totals by team */}
-        <div style={{background:"#fff",borderRadius:14,padding:20,border:"1px solid #e5e7eb"}}>
-          <div style={{fontSize:14,fontWeight:800,color:"#1e3a5f",marginBottom:14}}>Totals by Department</div>
-          <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:12,marginBottom:16}}>
-            {VISIT_ORDER.map(t => {
-              const tc = TEAM_COLORS[t]; const d = metrics.byTeam[t];
-              const pct = metrics.totalVisits > 0 ? ((d.visits/metrics.totalVisits)*100).toFixed(0) : 0;
-              const tGoalColor = d.goalPct >= 100 ? "#15803d" : d.goalPct >= 80 ? "#d97706" : "#dc2626";
-              const tGoalBg    = d.goalPct >= 100 ? "#f0fdf4" : d.goalPct >= 80 ? "#fffbeb" : "#fef2f2";
-              return (
-                <div key={t} style={{background:tc.bg,borderRadius:12,padding:16,border:"1px solid "+tc.dot+"44"}}>
-                  <div style={{fontSize:11,fontWeight:800,color:tc.text,textTransform:"uppercase",marginBottom:10}}>{t}</div>
-                  <div style={{display:"grid",gap:6}}>
-                    <div style={{display:"flex",justifyContent:"space-between"}}>
-                      <span style={{fontSize:11,color:tc.text+"99"}}>Evaluations</span>
-                      <span style={{fontSize:15,fontWeight:800,color:tc.text}}>{d.evals.toLocaleString()}</span>
-                    </div>
-                    <div style={{display:"flex",justifyContent:"space-between"}}>
-                      <span style={{fontSize:11,color:tc.text+"99"}}>Patient Visits</span>
-                      <span style={{fontSize:15,fontWeight:800,color:tc.text}}>{d.visits.toLocaleString()}</span>
-                    </div>
-                    <div style={{display:"flex",justifyContent:"space-between"}}>
-                      <span style={{fontSize:11,color:tc.text+"99"}}>Avg FTE/Day</span>
-                      <span style={{fontSize:14,fontWeight:700,color:tc.text}}>{metrics.hasFTEData ? d.avgFTEPerDay.toFixed(1) : "—"}</span>
-                    </div>
-                    <div style={{borderTop:"1px solid "+tc.dot+"22",paddingTop:6,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                      <span style={{fontSize:12,color:tc.text,fontWeight:700}}>Visits/FTE/Day</span>
-                      <span style={{fontSize:22,fontWeight:800,color:tc.dot}}>{metrics.hasFTEData ? d.visitsPerFTEDay.toFixed(2) : "—"}</span>
-                    </div>
-                    {metrics.hasFTEData && (
-                      <div style={{background:tGoalBg,borderRadius:6,padding:"5px 8px"}}>
-                        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:3}}>
-                          <span style={{fontSize:10,color:tGoalColor,fontWeight:600}}>Forecast/person/yr</span>
-                          <span style={{fontSize:13,fontWeight:800,color:tGoalColor}}>{Math.round(d.forecastPerPerson).toLocaleString()}</span>
-                        </div>
-                        <div style={{height:4,background:tGoalColor+"22",borderRadius:2}}>
-                          <div style={{height:"100%",width:Math.min(d.goalPct,100)+"%",background:tGoalColor,borderRadius:2,transition:"width 0.4s"}} />
-                        </div>
-                        <div style={{fontSize:10,color:tGoalColor,textAlign:"right",marginTop:2}}>{d.goalPct.toFixed(0)}% of {d.annualTarget?.toLocaleString()} goal ({d.visitDayTarget?.toFixed(1)} v/FTE/day)</div>
-                      </div>
-                    )}
-                    <div style={{height:3,background:tc.dot+"22",borderRadius:2,marginTop:2}}>
-                      <div style={{height:"100%",width:pct+"%",background:tc.dot,borderRadius:2}} />
-                    </div>
-                    <div style={{fontSize:10,color:tc.text+"88",textAlign:"right"}}>{pct}% of dept visits</div>
-                  </div>
+          {/* Total visits */}
+          <div style={{background:"#f8fafc",borderRadius:12,padding:"14px 16px",border:"1px solid #e5e7eb"}}>
+            <div style={{fontSize:9,color:"#6b7280",fontWeight:700,textTransform:"uppercase",letterSpacing:"0.05em",marginBottom:4}}>Total Visits</div>
+            <div style={{fontSize:32,fontWeight:800,color:"#1e3a5f",lineHeight:1}}>{metrics.totalVisits.toLocaleString()}</div>
+            <div style={{fontSize:10,color:"#9ca3af",marginTop:4}}>+ {metrics.totalEvals.toLocaleString()} evals</div>
+          </div>
+          {/* Per-team goals */}
+          {TEAMS.map(t => {
+            const d = metrics.byTeam[t]; const tc = TEAM_COLORS[t];
+            const gc = d.goalPct>=100?"#15803d":d.goalPct>=80?"#d97706":"#dc2626";
+            return (
+              <div key={t} style={{background:tc.bg,borderRadius:12,padding:"14px 16px",border:"1px solid "+tc.dot+"44"}}>
+                <div style={{fontSize:9,color:tc.text,fontWeight:700,textTransform:"uppercase",letterSpacing:"0.05em",marginBottom:4}}>{t} V/FTE/Day</div>
+                <div style={{fontSize:32,fontWeight:800,color:tc.dot,lineHeight:1}}>{d.visitsPerFTEDay.toFixed(2)}</div>
+                <div style={{fontSize:10,color:gc,marginTop:4}}>Goal: {d.visitDayTarget?.toFixed(1)} · {d.goalPct?.toFixed(0)}%</div>
+                <div style={{height:3,background:gc+"22",borderRadius:2,marginTop:6}}>
+                  <div style={{height:"100%",width:Math.min(d.goalPct||0,100)+"%",background:gc,borderRadius:2}} />
                 </div>
-              );
-            })}
+              </div>
+            );
+          })}
+        </div>
+
+        {/* ── Section 2: Productivity Chart ── */}
+        <div style={{background:"#fff",borderRadius:14,padding:20,border:"1px solid #e5e7eb"}}>
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14}}>
+            <div style={{fontSize:14,fontWeight:800,color:"#1e3a5f"}}>📈 Visits / FTE / Day — Weekly Trend</div>
+            <div style={{display:"flex",gap:10,fontSize:11}}>
+              {[["Dept","#7c3aed"],["Rehab","#ef4444"],["Peds","#3b82f6"],["Acute","#10b981"]].map(([t,c])=>(
+                <span key={t} style={{display:"flex",alignItems:"center",gap:4,color:"#374151"}}>
+                  <span style={{width:12,height:3,background:c,borderRadius:2,display:"inline-block"}} />{t}
+                </span>
+              ))}
+              <span style={{display:"flex",alignItems:"center",gap:4,color:"#374151"}}>
+                <span style={{width:12,height:2,background:"#9ca3af",borderRadius:2,display:"inline-block",borderTop:"2px dashed #9ca3af"}} />Goal
+              </span>
+            </div>
           </div>
-          {/* Dept totals row */}
-          <div style={{background:"#f8fafc",borderRadius:10,padding:"12px 16px",display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))",gap:12,border:"1px solid #e5e7eb"}}>
-            <div style={{textAlign:"center"}}>
-              <div style={{fontSize:10,color:"#6b7280",fontWeight:600,textTransform:"uppercase"}}>Total Evals</div>
-              <div style={{fontSize:24,fontWeight:800,color:"#1e3a5f"}}>{metrics.totalEvals.toLocaleString()}</div>
-            </div>
-            <div style={{textAlign:"center"}}>
-              <div style={{fontSize:10,color:"#6b7280",fontWeight:600,textTransform:"uppercase"}}>Total Visits</div>
-              <div style={{fontSize:24,fontWeight:800,color:"#1e3a5f"}}>{metrics.totalVisits.toLocaleString()}</div>
-            </div>
-            <div style={{textAlign:"center"}}>
-              <div style={{fontSize:10,color:"#6b7280",fontWeight:600,textTransform:"uppercase"}}>Total Visits (incl. Evals)</div>
-              <div style={{fontSize:24,fontWeight:800,color:"#0ea5e9"}}>{metrics.totalVisits.toLocaleString()}</div>
-            </div>
-            <div style={{textAlign:"center"}}>
-              <div style={{fontSize:10,color:"#6b7280",fontWeight:600,textTransform:"uppercase"}}>
-                {metrics.hasFTEData ? "Visits/FTE/Day" : "Visits/Day"}
-              </div>
-              <div style={{fontSize:24,fontWeight:800,color:"#7c3aed"}}>
-                {metrics.hasFTEData ? metrics.avgVisitsPerFTEDay.toFixed(2) : metrics.avgVisitsPerDay.toFixed(1)}
-              </div>
-            </div>
+          {hasRecharts ? (
+            <ResponsiveContainer width="100%" height={280}>
+              <LineChart data={chartData} margin={{top:5,right:20,left:0,bottom:5}}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
+                <XAxis dataKey="label" tick={{fontSize:10,fill:"#6b7280"}} />
+                <YAxis tick={{fontSize:10,fill:"#6b7280"}} domain={[0,"auto"]} />
+                <Tooltip formatter={(v,n)=>[v?.toFixed(2)+" v/FTE/day",n]} contentStyle={{fontSize:11,borderRadius:8}} />
+                <ReferenceLine y={DEPT_GOAL_DAY} stroke="#9ca3af" strokeDasharray="4 4" label={{value:`Goal ${DEPT_GOAL_DAY.toFixed(1)}`,fontSize:9,fill:"#9ca3af"}} />
+                <Line type="monotone" dataKey="dept"  name="Dept"  stroke="#7c3aed" strokeWidth={3} dot={{r:3}} connectNulls />
+                <Line type="monotone" dataKey="Rehab" name="Rehab" stroke="#ef4444" strokeWidth={2} dot={{r:2}} connectNulls />
+                <Line type="monotone" dataKey="Peds"  name="Peds"  stroke="#3b82f6" strokeWidth={2} dot={{r:2}} connectNulls />
+                <Line type="monotone" dataKey="Acute" name="Acute" stroke="#10b981" strokeWidth={2} dot={{r:2}} connectNulls />
+              </LineChart>
+            </ResponsiveContainer>
+          ) : (
+            <div style={{padding:20,textAlign:"center",color:"#9ca3af",fontSize:12}}>Charts require Recharts — add to your index.html</div>
+          )}
+        </div>
+
+        {/* ── Section 3: Census + NW Trends side by side ── */}
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16}}>
+
+          {/* Census trends */}
+          <div style={{background:"#fff",borderRadius:14,padding:20,border:"1px solid #e5e7eb"}}>
+            <div style={{fontSize:14,fontWeight:800,color:"#1e3a5f",marginBottom:14}}>🏥 Avg Daily Census — Weekly</div>
+            {hasRecharts ? (
+              <ResponsiveContainer width="100%" height={220}>
+                <LineChart data={censusChartData} margin={{top:5,right:20,left:0,bottom:5}}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
+                  <XAxis dataKey="label" tick={{fontSize:9,fill:"#6b7280"}} />
+                  <YAxis tick={{fontSize:9,fill:"#6b7280"}} />
+                  <Tooltip contentStyle={{fontSize:11,borderRadius:8}} />
+                  <Line type="monotone" dataKey="Rehab" name="Rehab" stroke="#ef4444" strokeWidth={2} dot={{r:2}} connectNulls />
+                  <Line type="monotone" dataKey="Peds"  name="Peds"  stroke="#3b82f6" strokeWidth={2} dot={{r:2}} connectNulls />
+                  <Line type="monotone" dataKey="Acute" name="Acute" stroke="#10b981" strokeWidth={2} dot={{r:2}} connectNulls />
+                </LineChart>
+              </ResponsiveContainer>
+            ) : <div style={{height:220,display:"flex",alignItems:"center",justifyContent:"center",color:"#9ca3af",fontSize:12}}>No chart available</div>}
+          </div>
+
+          {/* Non-work trends */}
+          <div style={{background:"#fff",borderRadius:14,padding:20,border:"1px solid #e5e7eb"}}>
+            <div style={{fontSize:14,fontWeight:800,color:"#1e3a5f",marginBottom:14}}>🏖 Non-Work Hours — Weekly</div>
+            {hasRecharts ? (
+              <ResponsiveContainer width="100%" height={220}>
+                <BarChart data={nwChartData} margin={{top:5,right:20,left:0,bottom:5}}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
+                  <XAxis dataKey="label" tick={{fontSize:9,fill:"#6b7280"}} />
+                  <YAxis tick={{fontSize:9,fill:"#6b7280"}} />
+                  <Tooltip contentStyle={{fontSize:11,borderRadius:8}} />
+                  <Legend wrapperStyle={{fontSize:10}} />
+                  {nonWorkTypes.map(nw => (
+                    <Bar key={nw.code} dataKey={nw.code} name={nw.label} stackId="nw" fill={nw.color} />
+                  ))}
+                </BarChart>
+              </ResponsiveContainer>
+            ) : <div style={{height:220,display:"flex",alignItems:"center",justifyContent:"center",color:"#9ca3af",fontSize:12}}>No chart available</div>}
           </div>
         </div>
 
-        {/* Weekly history table */}
+        {/* ── Section 4: Weekly history table (condensed) ── */}
         <div style={{background:"#fff",borderRadius:14,padding:20,border:"1px solid #e5e7eb"}}>
-          <div style={{fontSize:14,fontWeight:800,color:"#1e3a5f",marginBottom:14}}>Weekly History</div>
+          <div style={{fontSize:14,fontWeight:800,color:"#1e3a5f",marginBottom:14}}>📋 Weekly History</div>
           <div style={{overflowX:"auto"}}>
             <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
               <thead>
                 <tr style={{borderBottom:"2px solid #e5e7eb"}}>
                   <th style={{textAlign:"left",padding:"6px 10px",fontWeight:700,color:"#374151",fontSize:11}}>Week</th>
                   {VISIT_ORDER.map(t=><th key={t} colSpan={2} style={{textAlign:"center",padding:"6px 8px",fontWeight:700,color:TEAM_COLORS[t].text,fontSize:11,background:TEAM_COLORS[t].bg}}>{t}</th>)}
-                  <th style={{textAlign:"center",padding:"6px 8px",fontWeight:700,color:"#374151",fontSize:11}}>Total Evals</th>
-                  <th style={{textAlign:"center",padding:"6px 8px",fontWeight:700,color:"#374151",fontSize:11}}>Total Visits</th>
+                  <th style={{textAlign:"center",padding:"6px 8px",fontWeight:700,color:"#374151",fontSize:11}}>Visits</th>
                   <th style={{textAlign:"center",padding:"6px 8px",fontWeight:700,color:"#7c3aed",fontSize:11}}>V/FTE/Day</th>
                 </tr>
                 <tr style={{borderBottom:"1px solid #f3f4f6"}}>
@@ -4437,40 +4479,36 @@ function VisitsTab({ visitData, updateVisitData, staff, weekStart, getDayFTE }) 
                     <th key={t+"e"} style={{textAlign:"center",padding:"2px 6px",fontWeight:600,color:TEAM_COLORS[t].text+"99",fontSize:10,background:TEAM_COLORS[t].bg+"66"}}>Eval</th>,
                     <th key={t+"v"} style={{textAlign:"center",padding:"2px 6px",fontWeight:600,color:TEAM_COLORS[t].text+"99",fontSize:10,background:TEAM_COLORS[t].bg+"66"}}>Visit</th>
                   ])}
-                  <th /><th /><th />
+                  <th /><th />
                 </tr>
               </thead>
               <tbody>
                 {[...viewWeeks].reverse().map(({key, wStart, wEnd, rec}) => {
-                  const weekTotal = TEAMS.reduce((a,t)=>(rec[t]?.evals||0)+(rec[t]?.visits||0)+a,0);
                   const weekVisits = TEAMS.reduce((a,t)=>(rec[t]?.visits||0)+a,0);
-                  const weekEvals  = TEAMS.reduce((a,t)=>(rec[t]?.evals||0)+a,0);
-                  // Sum FTE across the 5 weekdays of this week
                   const weekFTETotal = (() => {
                     if (!getDayFTE) return 0;
                     let s = 0;
                     for (let di=0; di<7; di++) {
                       const dObj = new Date(wStart+"T12:00:00"); dObj.setDate(dObj.getDate()+di);
-                      s += Number(getDayFTE(fmt(dObj)).total)||0; // all 7 days
+                      s += Number(getDayFTE(fmt(dObj)).total)||0;
                     }
                     return s;
                   })();
-                  const vPerDay = weekFTETotal > 0 ? (weekVisits/weekFTETotal).toFixed(2) : (weekVisits/7).toFixed(1);
+                  const vPerDay = weekFTETotal > 0 ? (weekVisits/weekFTETotal).toFixed(2) : "—";
+                  const onTrack = weekFTETotal > 0 && (weekVisits/weekFTETotal) >= DEPT_GOAL_DAY;
                   return (
                     <tr key={key} style={{borderBottom:"1px solid #f9fafb"}}
                       onMouseEnter={e=>e.currentTarget.style.background="#f9fafb"}
                       onMouseLeave={e=>e.currentTarget.style.background=""}>
-                      <td style={{padding:"7px 10px",fontWeight:600,color:"#374151",whiteSpace:"nowrap"}}>
-                        {new Date(wStart+"T12:00:00").toLocaleDateString("en-US",{month:"short",day:"numeric"})}–
-                        {new Date(wEnd+"T12:00:00").toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"})}
+                      <td style={{padding:"7px 10px",fontWeight:600,color:"#374151",whiteSpace:"nowrap",fontSize:11}}>
+                        {new Date(wStart+"T12:00:00").toLocaleDateString("en-US",{month:"short",day:"numeric"})}–{new Date(wEnd+"T12:00:00").toLocaleDateString("en-US",{month:"short",day:"numeric"})}
                       </td>
                       {VISIT_ORDER.map(t=>[
                         <td key={t+"e"} style={{textAlign:"center",padding:"7px 6px",color:TEAM_COLORS[t].text,fontWeight:600}}>{rec[t]?.evals||0}</td>,
                         <td key={t+"v"} style={{textAlign:"center",padding:"7px 6px",color:TEAM_COLORS[t].text,fontWeight:700}}>{rec[t]?.visits||0}</td>
                       ])}
-                      <td style={{textAlign:"center",padding:"7px 8px",fontWeight:700,color:"#1e3a5f"}}>{weekEvals}</td>
                       <td style={{textAlign:"center",padding:"7px 8px",fontWeight:700,color:"#1e3a5f"}}>{weekVisits}</td>
-                      <td style={{textAlign:"center",padding:"7px 8px",fontWeight:800,color:"#7c3aed"}}>{vPerDay}</td>
+                      <td style={{textAlign:"center",padding:"7px 8px",fontWeight:800,color:onTrack?"#15803d":weekFTETotal>0?"#dc2626":"#9ca3af"}}>{vPerDay}</td>
                     </tr>
                   );
                 })}
