@@ -1,5 +1,4 @@
 import { useState, useMemo, useRef, useEffect, useCallback } from "react";
-import { LineChart, BarChart, Line, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ReferenceLine, ResponsiveContainer } from "recharts";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 const TEAMS = ["Rehab", "Peds", "Acute"];
@@ -4302,7 +4301,9 @@ function VisitsTab({ visitData, updateVisitData, staff, weekStart, getDayFTE, en
 
   // Recharts colors
   const RC = { Rehab:"#ef4444", Peds:"#3b82f6", Acute:"#10b981", Dept:"#7c3aed" };
-  const hasRecharts = typeof LineChart !== "undefined";
+  const RC = window.Recharts || {};
+  const { LineChart, BarChart, Line, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ReferenceLine, ResponsiveContainer } = RC;
+  const hasRecharts = !!window.Recharts;
 
   return (
     <div style={{display:"grid",gap:16}}>
