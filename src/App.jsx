@@ -4299,10 +4299,7 @@ function VisitsTab({ visitData, updateVisitData, staff, weekStart, getDayFTE, en
     });
   }, [viewWeeks, viewStart, viewEnd, entries, staff, nonWorkTypes]);
 
-  // Recharts colors
-  const RC = { Rehab:"#ef4444", Peds:"#3b82f6", Acute:"#10b981", Dept:"#7c3aed" };
-  const RC = window.Recharts || {};
-  const { LineChart, BarChart, Line, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ReferenceLine, ResponsiveContainer } = RC;
+  const { LineChart, BarChart, Line, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ReferenceLine, ResponsiveContainer } = window.Recharts || {};
   const hasRecharts = !!window.Recharts;
 
   return (
