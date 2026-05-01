@@ -4294,8 +4294,7 @@ function VisitsTab({ visitData, updateVisitData, staff, weekStart, getDayFTE, en
     });
   }, [viewWeeks, viewStart, viewEnd, entries, staff, nonWorkTypes]);
 
-  const { LineChart, BarChart, Line, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ReferenceLine, ResponsiveContainer } = window.Recharts || {};
-  const hasRecharts = !!window.Recharts;
+  const hasRecharts = true; // using built-in SVG charts
 
   return (
     <div style={{display:"grid",gap:16}}>
@@ -4416,23 +4415,19 @@ function VisitsTab({ visitData, updateVisitData, staff, weekStart, getDayFTE, en
               </span>
             </div>
           </div>
-          {hasRecharts ? (
-            <ResponsiveContainer width="100%" height={280}>
-              <LineChart data={chartData} margin={{top:5,right:20,left:0,bottom:5}}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
-                <XAxis dataKey="label" tick={{fontSize:10,fill:"#6b7280"}} />
-                <YAxis tick={{fontSize:10,fill:"#6b7280"}} domain={[0,"auto"]} />
-                <Tooltip formatter={(v,n)=>[v?.toFixed(2)+" v/FTE/day",n]} contentStyle={{fontSize:11,borderRadius:8}} />
-                <ReferenceLine y={DEPT_GOAL_DAY} stroke="#9ca3af" strokeDasharray="4 4" label={{value:`Goal ${DEPT_GOAL_DAY.toFixed(1)}`,fontSize:9,fill:"#9ca3af"}} />
-                <Line type="monotone" dataKey="dept"  name="Dept"  stroke="#7c3aed" strokeWidth={3} dot={{r:3}} connectNulls />
-                <Line type="monotone" dataKey="Rehab" name="Rehab" stroke="#ef4444" strokeWidth={2} dot={{r:2}} connectNulls />
-                <Line type="monotone" dataKey="Peds"  name="Peds"  stroke="#3b82f6" strokeWidth={2} dot={{r:2}} connectNulls />
-                <Line type="monotone" dataKey="Acute" name="Acute" stroke="#10b981" strokeWidth={2} dot={{r:2}} connectNulls />
-              </LineChart>
-            </ResponsiveContainer>
-          ) : (
-            <div style={{padding:20,textAlign:"center",color:"#9ca3af",fontSize:12}}>Charts require Recharts — add to your index.html</div>
-          )}
+          <SVGLineChart
+            data={chartData}
+            lines={[
+              {key:"dept",  label:"Dept",  color:"#7c3aed", width:3},
+              {key:"Rehab", label:"Rehab", color:"#ef4444", width:2},
+              {key:"Peds",  label:"Peds",  color:"#3b82f6", width:2},
+              {key:"Acute", label:"Acute", color:"#10b981", width:2},
+            ]}
+            goalLine={DEPT_GOAL_DAY}
+            goalLabel={"Goal " + DEPT_GOAL_DAY.toFixed(2)}
+            height={280}
+            yLabel="v/FTE/day"
+          />
         </div>
 
         {/* ── Section 3: Census + NW Trends side by side ── */}
@@ -4441,38 +4436,27 @@ function VisitsTab({ visitData, updateVisitData, staff, weekStart, getDayFTE, en
           {/* Census trends */}
           <div style={{background:"#fff",borderRadius:14,padding:20,border:"1px solid #e5e7eb"}}>
             <div style={{fontSize:14,fontWeight:800,color:"#1e3a5f",marginBottom:14}}>🏥 Avg Daily Census — Weekly</div>
-            {hasRecharts ? (
-              <ResponsiveContainer width="100%" height={220}>
-                <LineChart data={censusChartData} margin={{top:5,right:20,left:0,bottom:5}}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
-                  <XAxis dataKey="label" tick={{fontSize:9,fill:"#6b7280"}} />
-                  <YAxis tick={{fontSize:9,fill:"#6b7280"}} />
-                  <Tooltip contentStyle={{fontSize:11,borderRadius:8}} />
-                  <Line type="monotone" dataKey="Rehab" name="Rehab" stroke="#ef4444" strokeWidth={2} dot={{r:2}} connectNulls />
-                  <Line type="monotone" dataKey="Peds"  name="Peds"  stroke="#3b82f6" strokeWidth={2} dot={{r:2}} connectNulls />
-                  <Line type="monotone" dataKey="Acute" name="Acute" stroke="#10b981" strokeWidth={2} dot={{r:2}} connectNulls />
-                </LineChart>
-              </ResponsiveContainer>
-            ) : <div style={{height:220,display:"flex",alignItems:"center",justifyContent:"center",color:"#9ca3af",fontSize:12}}>No chart available</div>}
+            <SVGLineChart
+              data={censusChartData}
+              lines={[
+                {key:"Rehab", label:"Rehab", color:"#ef4444", width:2},
+                {key:"Peds",  label:"Peds",  color:"#3b82f6", width:2},
+                {key:"Acute", label:"Acute", color:"#10b981", width:2},
+              ]}
+              height={220}
+              yLabel="avg census"
+            />
           </div>
 
           {/* Non-work trends */}
           <div style={{background:"#fff",borderRadius:14,padding:20,border:"1px solid #e5e7eb"}}>
             <div style={{fontSize:14,fontWeight:800,color:"#1e3a5f",marginBottom:14}}>🏖 Non-Work Hours — Weekly</div>
-            {hasRecharts ? (
-              <ResponsiveContainer width="100%" height={220}>
-                <BarChart data={nwChartData} margin={{top:5,right:20,left:0,bottom:5}}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
-                  <XAxis dataKey="label" tick={{fontSize:9,fill:"#6b7280"}} />
-                  <YAxis tick={{fontSize:9,fill:"#6b7280"}} />
-                  <Tooltip contentStyle={{fontSize:11,borderRadius:8}} />
-                  <Legend wrapperStyle={{fontSize:10}} />
-                  {nonWorkTypes.map(nw => (
-                    <Bar key={nw.code} dataKey={nw.code} name={nw.label} stackId="nw" fill={nw.color} />
-                  ))}
-                </BarChart>
-              </ResponsiveContainer>
-            ) : <div style={{height:220,display:"flex",alignItems:"center",justifyContent:"center",color:"#9ca3af",fontSize:12}}>No chart available</div>}
+            <SVGBarChart
+              data={nwChartData}
+              bars={nonWorkTypes.map(nw=>({key:nw.code, label:nw.label, color:nw.color}))}
+              height={220}
+              yLabel="hours"
+            />
           </div>
         </div>
 
@@ -6789,6 +6773,186 @@ function StaffDetailLookup({ staff, entries, nonWorkTypes }) {
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+// ─── SVG Line Chart ───────────────────────────────────────────────────────────
+function SVGLineChart({ data, lines, goalLine, goalLabel, height=260, yLabel="" }) {
+  const [tooltip, setTooltip] = useState(null);
+  const W = 800, H = height, PAD = { top:20, right:20, bottom:36, left:44 };
+  const chartW = W - PAD.left - PAD.right;
+  const chartH = H - PAD.top - PAD.bottom;
+
+  const allVals = data.flatMap(d => lines.map(l => d[l.key]).filter(v => v != null));
+  if (goalLine) allVals.push(goalLine);
+  const minY = 0;
+  const maxY = allVals.length ? Math.ceil(Math.max(...allVals) * 1.15) : 10;
+  const scaleY = v => chartH - ((v - minY) / (maxY - minY)) * chartH;
+  const scaleX = i => data.length > 1 ? (i / (data.length - 1)) * chartW : chartW / 2;
+
+  const pathFor = (key) => {
+    const pts = data.map((d, i) => d[key] != null ? `${scaleX(i).toFixed(1)},${scaleY(d[key]).toFixed(1)}` : null);
+    let path = ""; let inGap = true;
+    pts.forEach((p, i) => {
+      if (p == null) { inGap = true; return; }
+      path += inGap ? `M${p}` : `L${p}`;
+      inGap = false;
+    });
+    return path;
+  };
+
+  const yTicks = 5;
+  const xStep = data.length > 12 ? Math.ceil(data.length / 8) : 1;
+
+  return (
+    <div style={{position:"relative",width:"100%"}}>
+      <svg viewBox={`0 0 ${W} ${H}`} style={{width:"100%",height:height,overflow:"visible"}}>
+        <g transform={`translate(${PAD.left},${PAD.top})`}>
+          {/* Grid lines */}
+          {Array.from({length:yTicks+1},(_,i)=>{
+            const v = minY + (maxY-minY)*(i/yTicks);
+            const y = scaleY(v);
+            return <g key={i}>
+              <line x1={0} y1={y} x2={chartW} y2={y} stroke="#f3f4f6" strokeWidth={1} />
+              <text x={-6} y={y+4} fontSize={9} fill="#9ca3af" textAnchor="end">{v.toFixed(1)}</text>
+            </g>;
+          })}
+          {/* X axis labels */}
+          {data.map((d,i) => i % xStep === 0 && (
+            <text key={i} x={scaleX(i)} y={chartH+16} fontSize={9} fill="#9ca3af" textAnchor="middle">{d.label}</text>
+          ))}
+          {/* Goal line */}
+          {goalLine != null && (
+            <g>
+              <line x1={0} y1={scaleY(goalLine)} x2={chartW} y2={scaleY(goalLine)} stroke="#9ca3af" strokeWidth={1.5} strokeDasharray="5,4" />
+              <text x={chartW+4} y={scaleY(goalLine)+4} fontSize={9} fill="#9ca3af">{goalLabel||""}</text>
+            </g>
+          )}
+          {/* Lines */}
+          {lines.map(l => (
+            <path key={l.key} d={pathFor(l.key)} fill="none" stroke={l.color} strokeWidth={l.width||2} strokeLinejoin="round" strokeLinecap="round" />
+          ))}
+          {/* Dots + hover targets */}
+          {data.map((d,i) => (
+            <g key={i} onMouseEnter={e=>setTooltip({i,x:scaleX(i),y:0,d})} onMouseLeave={()=>setTooltip(null)}>
+              {lines.map(l => d[l.key] != null && (
+                <circle key={l.key} cx={scaleX(i)} cy={scaleY(d[l.key])} r={3} fill={l.color} />
+              ))}
+              <rect x={scaleX(i)-12} y={0} width={24} height={chartH} fill="transparent" style={{cursor:"default"}} />
+            </g>
+          ))}
+          {/* Tooltip */}
+          {tooltip && (() => {
+            const tx = Math.min(tooltip.x, chartW - 120);
+            return (
+              <g>
+                <line x1={tooltip.x} y1={0} x2={tooltip.x} y2={chartH} stroke="#e5e7eb" strokeWidth={1} />
+                <rect x={tx} y={4} width={115} height={lines.length*16+20} rx={6} fill="white" stroke="#e5e7eb" strokeWidth={1} filter="url(#shadow)" />
+                <text x={tx+8} y={18} fontSize={9} fontWeight="bold" fill="#374151">{tooltip.d.label}</text>
+                {lines.map((l,li) => tooltip.d[l.key] != null && (
+                  <g key={l.key}>
+                    <circle cx={tx+14} cy={28+li*16} r={3} fill={l.color} />
+                    <text x={tx+20} y={32+li*16} fontSize={9} fill="#374151">{l.label}: {tooltip.d[l.key]?.toFixed(2)}</text>
+                  </g>
+                ))}
+              </g>
+            );
+          })()}
+        </g>
+        <defs>
+          <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+            <feDropShadow dx="0" dy="2" stdDeviation="3" floodOpacity="0.1" />
+          </filter>
+        </defs>
+      </svg>
+      {/* Legend */}
+      <div style={{display:"flex",gap:12,flexWrap:"wrap",marginTop:4,paddingLeft:44}}>
+        {lines.map(l=>(
+          <span key={l.key} style={{display:"flex",alignItems:"center",gap:4,fontSize:10,color:"#374151"}}>
+            <span style={{width:14,height:3,background:l.color,borderRadius:2,display:"inline-block"}} />{l.label}
+          </span>
+        ))}
+        {goalLine != null && (
+          <span style={{display:"flex",alignItems:"center",gap:4,fontSize:10,color:"#9ca3af"}}>
+            <span style={{width:14,height:2,background:"#9ca3af",borderRadius:2,display:"inline-block",borderTop:"2px dashed #9ca3af"}} />Goal
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── SVG Stacked Bar Chart ────────────────────────────────────────────────────
+function SVGBarChart({ data, bars, height=220, yLabel="" }) {
+  const [tooltip, setTooltip] = useState(null);
+  const W = 800, H = height, PAD = { top:20, right:20, bottom:36, left:44 };
+  const chartW = W - PAD.left - PAD.right;
+  const chartH = H - PAD.top - PAD.bottom;
+
+  const maxY = data.length ? Math.ceil(Math.max(...data.map(d => bars.reduce((a,b)=>a+(d[b.key]||0),0))) * 1.15) : 10;
+  const scaleY = v => chartH - (v / maxY) * chartH;
+  const barW = Math.max(4, (chartW / Math.max(data.length,1)) * 0.7);
+  const xStep = data.length > 12 ? Math.ceil(data.length / 8) : 1;
+
+  return (
+    <div style={{position:"relative",width:"100%"}}>
+      <svg viewBox={`0 0 ${W} ${H}`} style={{width:"100%",height:height,overflow:"visible"}}>
+        <g transform={`translate(${PAD.left},${PAD.top})`}>
+          {/* Grid */}
+          {[0,0.25,0.5,0.75,1].map((pct,i) => {
+            const v = maxY * pct; const y = scaleY(v);
+            return <g key={i}>
+              <line x1={0} y1={y} x2={chartW} y2={y} stroke="#f3f4f6" strokeWidth={1} />
+              <text x={-6} y={y+4} fontSize={9} fill="#9ca3af" textAnchor="end">{v.toFixed(0)}</text>
+            </g>;
+          })}
+          {/* Bars */}
+          {data.map((d,i) => {
+            const x = (i / Math.max(data.length,1)) * chartW + (chartW / Math.max(data.length,1) - barW) / 2;
+            let yOffset = chartH;
+            return (
+              <g key={i} onMouseEnter={()=>setTooltip({i,x,d})} onMouseLeave={()=>setTooltip(null)}>
+                {bars.map(b => {
+                  const v = d[b.key] || 0;
+                  if (v <= 0) return null;
+                  const bH = (v / maxY) * chartH;
+                  yOffset -= bH;
+                  return <rect key={b.key} x={x} y={yOffset} width={barW} height={bH} fill={b.color} rx={1} />;
+                })}
+                {i % xStep === 0 && (
+                  <text x={x + barW/2} y={chartH+16} fontSize={9} fill="#9ca3af" textAnchor="middle">{d.label}</text>
+                )}
+              </g>
+            );
+          })}
+          {/* Tooltip */}
+          {tooltip && (() => {
+            const tx = Math.min(tooltip.x, chartW - 130);
+            const activeBars = bars.filter(b => (tooltip.d[b.key]||0) > 0);
+            return (
+              <g>
+                <rect x={tx} y={4} width={125} height={activeBars.length*16+20} rx={6} fill="white" stroke="#e5e7eb" strokeWidth={1} />
+                <text x={tx+8} y={18} fontSize={9} fontWeight="bold" fill="#374151">{tooltip.d.label}</text>
+                {activeBars.map((b,bi) => (
+                  <g key={b.key}>
+                    <rect x={tx+8} y={24+bi*16} width={8} height={8} fill={b.color} rx={1} />
+                    <text x={tx+20} y={32+bi*16} fontSize={9} fill="#374151">{b.label}: {(tooltip.d[b.key]||0).toFixed(0)}h</text>
+                  </g>
+                ))}
+              </g>
+            );
+          })()}
+        </g>
+      </svg>
+      {/* Legend */}
+      <div style={{display:"flex",gap:10,flexWrap:"wrap",marginTop:4,paddingLeft:44}}>
+        {bars.map(b=>(
+          <span key={b.key} style={{display:"flex",alignItems:"center",gap:4,fontSize:10,color:"#374151"}}>
+            <span style={{width:10,height:10,background:b.color,borderRadius:2,display:"inline-block"}} />{b.label}
+          </span>
+        ))}
+      </div>
     </div>
   );
 }
